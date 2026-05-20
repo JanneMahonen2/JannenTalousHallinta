@@ -126,7 +126,7 @@
                 <div class="compare-setup-side">
                     <div class="compare-setup-header">
                         <span>Sijoitukset ja säästöt</span>
-                        <span class="field-hint">Valitse mukaan otettavat kohteet — siirto jaetaan suhteessa</span>
+                        <span class="field-hint">Valitse mukaan otettavat kohteet — tavoitesäästöt pidetään mukana, muu siirretään suhteessa</span>
                     </div>
                     <div class="compare-invest-list" id="compareInvestList"></div>
                 </div>
@@ -154,7 +154,7 @@
                     </div>
                     <div class="compare-slider-row">
                         <div class="compare-slider-label">
-                            <span>Sijoituksen tuoton vaihtelu (riski) <span class="field-hint">— automaattinen: sijoitusvaltaisuus × aikajakso</span></span>
+                            <span>Sijoituksen tuoton vaihtelu (riski) <span class="field-hint">— automaattinen: σ-painotettu × sijoitusosuus</span></span>
                             <span id="compareRiskValue" class="compare-slider-value">±5 %</span>
                         </div>
                         <div class="compare-risk-track">
@@ -171,12 +171,9 @@
                 <div class="compare-controls">
                     <div class="compare-horizon">
                         <span class="compare-horizon-label">Aikajakso</span>
-                        <div class="compare-horizon-btns" id="compareHorizonBtns">
-                            <button type="button" data-years="1">1 v</button>
-                            <button type="button" data-years="5">5 v</button>
-                            <button type="button" data-years="10">10 v</button>
-                            <button type="button" data-years="20" class="active">20 v</button>
-                            <button type="button" data-years="30">30 v</button>
+                        <div class="compare-horizon-slider">
+                            <input type="range" id="compareHorizonSlider" min="1" max="30" step="1" value="20">
+                            <span id="compareHorizonValue" class="compare-slider-value">20 v</span>
                         </div>
                     </div>
                     <button type="button" id="compareAssessBtn" class="compare-assess-btn">💡 Arvioi paras strategia <span class="beta-tag">beta</span></button>
@@ -294,6 +291,15 @@
                             <span>Odotettu tuotto (%)</span>
                             <input type="number" id="investGrowth" min="0" step="0.1" inputmode="decimal" placeholder="%">
                         </label>
+                        <label class="field-row">
+                            <span>Tyyppi / volatiliteetti</span>
+                            <select id="investVolClass">
+                                <!-- options populated dynamically from VOLATILITY_CLASSES -->
+                            </select>
+                        </label>
+                        <div class="field-hint" id="investVolHint">
+                            Käytetään riskipreemion ja riskialueen laskemiseen Vertailu-näkymässä.
+                        </div>
                     </div>
 
                     <!-- Link to category -->
