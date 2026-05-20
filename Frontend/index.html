@@ -23,61 +23,296 @@
             </div>
         </header>
 
-        <section class="presets">
-            <label class="preset-pick">
-                <span>Esivalinta</span>
-                <select id="presetSelect">
-                    <option value="">— Valitse —</option>
-                </select>
-            </label>
-            <button type="button" id="savePresetBtn">+ Tallenna nykyinen</button>
-            <button type="button" id="renamePresetBtn" disabled>Nimeä uudelleen</button>
-            <button type="button" id="deletePresetBtn" class="danger" disabled>Poista valittu</button>
-        </section>
+        <!-- Tab navigation -->
+        <nav class="tab-bar" role="tablist">
+            <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="budget">Budjetti</button>
+            <button type="button" class="tab" role="tab" aria-selected="false" data-tab="future">Tulevaisuus</button>
+            <button type="button" class="tab" role="tab" aria-selected="false" data-tab="compare">Vertailu</button>
+        </nav>
 
-        <section class="controls">
-            <label class="income-input">
-                <span>Käytettävät varat</span>
-                <input type="number" id="income" min="0" step="10" inputmode="numeric">
-                <span class="currency">€</span>
-            </label>
+        <!-- ===== BUDGET PAGE ===== -->
+        <section id="budgetPage" class="page active" role="tabpanel">
+            <section class="presets">
+                <label class="preset-pick">
+                    <span>Esivalinta</span>
+                    <select id="presetSelect">
+                        <option value="">— Valitse —</option>
+                    </select>
+                </label>
+                <button type="button" id="savePresetBtn">+ Tallenna nykyinen</button>
+                <button type="button" id="renamePresetBtn" disabled>Nimeä uudelleen</button>
+                <button type="button" id="deletePresetBtn" class="danger" disabled>Poista valittu</button>
+            </section>
 
-            <div class="period-switch" role="group" aria-label="Budjettijakso">
-                <button type="button" data-period="week">Viikko</button>
-                <button type="button" data-period="month">Kuukausi</button>
-                <button type="button" data-period="year">Vuosi</button>
+            <section class="controls">
+                <label class="income-input">
+                    <span>Käytettävät varat</span>
+                    <input type="number" id="income" min="0" step="10" inputmode="numeric">
+                    <span class="currency">€</span>
+                </label>
+
+                <div class="period-switch" role="group" aria-label="Budjettijakso">
+                    <button type="button" data-period="week">Viikko</button>
+                    <button type="button" data-period="month">Kuukausi</button>
+                    <button type="button" data-period="year">Vuosi</button>
+                </div>
+            </section>
+
+            <section class="bar-section">
+                <div class="bar" id="bar" aria-label="Budjettipalkki"></div>
+                <p class="bar-hint">Vedä jakajaviivoja siirtääksesi euroja kahden kategorian välillä — kokonaissumma säilyy samana. Kun nostat liukua, muut kategoriat kutistuvat automaattisesti niin ettei Käytetty ylitä käytettäviä varoja.</p>
+            </section>
+
+            <section class="categories">
+                <div class="categories-head">
+                    <h2>Kategoriat</h2>
+                    <button type="button" id="addCategory">+ Lisää kategoria</button>
+                </div>
+                <ul id="categoryList"></ul>
+            </section>
+
+            <section class="summary">
+                <div>
+                    <span class="summary-label">Käytettävät varat</span>
+                    <strong id="sumIncome">0 €</strong>
+                </div>
+                <div>
+                    <span class="summary-label">Käytetty</span>
+                    <strong id="sumExpenses">0 €</strong>
+                </div>
+                <div>
+                    <span class="summary-label">Jäljellä</span>
+                    <strong id="sumRemaining">0 €</strong>
+                </div>
+            </section>
+
+            <p class="save-status" id="saveStatus" aria-live="polite"></p>
+
+            <!-- Entity management link -->
+            <div class="entity-mgmt-bar">
+                <button type="button" id="openEntityModal" class="entity-mgmt-btn">🏦 Hallitse tilejä ja velkoja</button>
             </div>
         </section>
 
-        <section class="bar-section">
-            <div class="bar" id="bar" aria-label="Budjettipalkki"></div>
-            <p class="bar-hint">Vedä jakajaviivoja siirtääksesi euroja kahden kategorian välillä — kokonaissumma säilyy samana. Kun nostat liukua, muut kategoriat kutistuvat automaattisesti niin ettei Jaettu ylitä käytettäviä varoja.</p>
-        </section>
+        <!-- ===== FUTURE PLANNING PAGE ===== -->
+        <section id="futurePage" class="page" role="tabpanel">
+            <h2 class="future-heading">Tulevaisuuden suunnittelu</h2>
 
-        <section class="categories">
-            <div class="categories-head">
-                <h2>Kategoriat</h2>
-                <button type="button" id="addCategory">+ Lisää kategoria</button>
+            <div id="entityCards">
+                <!-- Rendered by JS: each entity gets a projection card -->
             </div>
-            <ul id="categoryList"></ul>
-        </section>
 
-        <section class="summary">
-            <div>
-                <span class="summary-label">Käytettävät varat</span>
-                <strong id="sumIncome">0 €</strong>
-            </div>
-            <div>
-                <span class="summary-label">Jaettu</span>
-                <strong id="sumExpenses">0 €</strong>
-            </div>
-            <div>
-                <span class="summary-label">Jäljellä</span>
-                <strong id="sumRemaining">0 €</strong>
+            <div id="entityCardsEmpty" class="empty-state">
+                <p>Ei vielä tilejä tai velkoja. <button type="button" class="link-btn" id="emptyGoToEntities">Lisää niitä Budjetti-sivulla.</button></p>
             </div>
         </section>
 
-        <p class="save-status" id="saveStatus" aria-live="polite"></p>
+        <!-- ===== COMPARE PAGE ===== -->
+        <section id="comparePage" class="page" role="tabpanel">
+            <h2 class="future-heading">Vertailu</h2>
+            <p class="compare-intro">Vertaile, kannattaako lainaa lyhentää nopeammin vai sijoittaa enemmän. Liu'uta budjetin sisällä — kokonaissumma pysyy samana.</p>
+
+            <div class="compare-setup">
+                <div class="compare-setup-side">
+                    <div class="compare-setup-header">
+                        <span>Laina</span>
+                        <span class="field-hint">Yksi vertailtava laina</span>
+                    </div>
+                    <select id="compareLoanSelect">
+                        <option value="">— Valitse —</option>
+                    </select>
+                    <div class="compare-info" id="compareLoanInfo"></div>
+                </div>
+                <div class="compare-setup-side">
+                    <div class="compare-setup-header">
+                        <span>Sijoitukset ja säästöt</span>
+                        <span class="field-hint">Valitse mukaan otettavat kohteet — siirto jaetaan suhteessa</span>
+                    </div>
+                    <div class="compare-invest-list" id="compareInvestList"></div>
+                </div>
+            </div>
+
+            <div id="compareEmpty" class="empty-state" style="display:none"></div>
+
+            <div id="compareBody" style="display:none">
+                <div class="compare-summary" id="compareSummary"></div>
+
+                <div class="compare-sliders">
+                    <div class="compare-slider-row compare-shift-row">
+                        <div class="compare-slider-label">
+                            <span>Suunnitelma</span>
+                            <span id="compareShiftValue" class="compare-slider-value">Nykyinen jako</span>
+                        </div>
+                        <div class="compare-shift-track">
+                            <input type="range" id="compareShiftSlider" min="-100" max="100" step="10" value="0">
+                        </div>
+                        <div class="compare-slider-ends compare-slider-tri">
+                            <span class="end-left">← Lainaan</span>
+                            <span class="end-mid">Nykyinen</span>
+                            <span class="end-right">Sijoituksiin →</span>
+                        </div>
+                    </div>
+                    <div class="compare-slider-row">
+                        <div class="compare-slider-label">
+                            <span>Sijoituksen tuoton vaihtelu (riski) <span class="field-hint">— automaattinen: sijoitusvaltaisuus × aikajakso</span></span>
+                            <span id="compareRiskValue" class="compare-slider-value">±5 %</span>
+                        </div>
+                        <div class="compare-risk-track">
+                            <input type="range" id="compareRiskSlider" min="0" max="20" step="1" value="5">
+                            <button type="button" id="compareRiskLock" class="risk-lock-btn unlocked" title="Lukitse riski manuaalisesti" aria-pressed="false">🔓</button>
+                        </div>
+                        <div class="compare-slider-ends">
+                            <span>0 %</span>
+                            <span>±20 %</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="compare-controls">
+                    <div class="compare-horizon">
+                        <span class="compare-horizon-label">Aikajakso</span>
+                        <div class="compare-horizon-btns" id="compareHorizonBtns">
+                            <button type="button" data-years="1">1 v</button>
+                            <button type="button" data-years="5">5 v</button>
+                            <button type="button" data-years="10">10 v</button>
+                            <button type="button" data-years="20" class="active">20 v</button>
+                            <button type="button" data-years="30">30 v</button>
+                        </div>
+                    </div>
+                    <button type="button" id="compareAssessBtn" class="compare-assess-btn">💡 Arvioi paras strategia <span class="beta-tag">beta</span></button>
+                </div>
+
+                <div id="compareAssessment" class="compare-assessment" style="display:none"></div>
+
+                <div id="compareScenarios" class="compare-scenarios"></div>
+
+                <div class="compare-chart-wrap">
+                    <div class="compare-chart-title" id="compareChartTitle">Nettovarallisuus ja sen koostumus ajan myötä</div>
+                    <div id="compareChart" class="compare-chart"></div>
+                </div>
+
+                <div class="compare-cta-wrap">
+                    <button type="button" id="compareApplyCta" class="compare-cta" disabled>Liikuta liukuria nähdäksesi suunnitelma</button>
+                    <span class="compare-cta-hint">Painike kopioi liukurin mukaiset muutokset Budjetti-sivulle</span>
+                </div>
+
+                <p class="compare-note">ℹ Syvempi sijoitusnäkymä uutisineen ja monipuolisemmilla riskimalleilla tulee myöhemmin omaksi sivukseen.</p>
+            </div>
+        </section>
+
+        <!-- ===== ENTITY MODAL ===== -->
+        <dialog id="entityModal" class="entity-modal">
+            <form method="dialog">
+                <div class="modal-header">
+                    <h3 id="entityModalTitle">Uusi tili / velka</h3>
+                    <button type="button" class="modal-close" data-close-modal aria-label="Sulje">&times;</button>
+                </div>
+
+                <div class="modal-body">
+                    <input type="hidden" id="entityFormId" value="">
+
+                    <label class="field-row">
+                        <span>Nimi</span>
+                        <input type="text" id="entityName" required placeholder="esim. Asuntolaina OP">
+                    </label>
+
+                    <label class="field-row">
+                        <span>Tyyppi</span>
+                        <select id="entityType" required>
+                            <option value="">— Valitse —</option>
+                            <option value="loan">Laina</option>
+                            <option value="savings">Säästötili</option>
+                            <option value="investment">Sijoitus</option>
+                        </select>
+                    </label>
+
+                    <!-- Loan-specific fields -->
+                    <div class="type-fields" data-type="loan">
+                        <label class="field-row">
+                            <span>Pääoma (velan määrä)</span>
+                            <input type="number" id="loanPrincipal" min="0" step="100" inputmode="numeric" placeholder="€">
+                        </label>
+                        <label class="field-row">
+                            <span>Korko (%)</span>
+                            <input type="number" id="loanInterest" min="0" step="0.1" inputmode="decimal" placeholder="%">
+                        </label>
+                        <label class="field-row">
+                            <span>Takaisinmaksuaika (kk)</span>
+                            <input type="number" id="loanTerm" min="1" step="1" inputmode="numeric" placeholder="kk">
+                        </label>
+                        <label class="field-row">
+                            <span>Aloituspäivä</span>
+                            <input type="date" id="loanStartDate">
+                        </label>
+                        <label class="field-row checkbox-row">
+                            <input type="checkbox" id="loanRedistribute">
+                            <span>Kun laina on maksettu, ohjaa kuukausierä toiseen kohteeseen</span>
+                        </label>
+                        <label class="field-row" id="loanRedistributeRow" style="display:none">
+                            <span>Ohjaa kohteeseen</span>
+                            <select id="loanRedistributeTarget">
+                                <option value="">— Valitse —</option>
+                            </select>
+                            <span class="field-hint">Maksu lisätään automaattisesti tähän kun laina on lyhennetty</span>
+                        </label>
+                    </div>
+
+                    <!-- Savings-specific fields -->
+                    <div class="type-fields" data-type="savings">
+                        <label class="field-row">
+                            <span>Nykyinen saldo</span>
+                            <input type="number" id="savingsBalance" min="0" step="100" inputmode="numeric" placeholder="€">
+                        </label>
+                        <label class="field-row">
+                            <span>Korko (%)</span>
+                            <input type="number" id="savingsInterest" min="0" step="0.1" inputmode="decimal" placeholder="%">
+                        </label>
+                        <label class="field-row">
+                            <span>Tavoitesumma (valinnainen)</span>
+                            <input type="number" id="savingsTarget" min="0" step="100" inputmode="numeric" placeholder="€ — säästäminen pysähtyy kun saavutettu">
+                        </label>
+                        <label class="field-row checkbox-row">
+                            <input type="checkbox" id="savingsRedistribute">
+                            <span>Kun tavoite on saavutettu, ohjaa rahat toiseen kohteeseen</span>
+                        </label>
+                        <label class="field-row" id="savingsRedistributeRow" style="display:none">
+                            <span>Ohjaa kohteeseen</span>
+                            <select id="savingsRedistributeTarget">
+                                <option value="">— Valitse —</option>
+                            </select>
+                            <span class="field-hint">Säästö lisätään automaattisesti tähän kun tavoite on saavutettu</span>
+                        </label>
+                    </div>
+
+                    <!-- Investment-specific fields -->
+                    <div class="type-fields" data-type="investment">
+                        <label class="field-row">
+                            <span>Nykyinen arvo</span>
+                            <input type="number" id="investValue" min="0" step="100" inputmode="numeric" placeholder="€">
+                        </label>
+                        <label class="field-row">
+                            <span>Odotettu tuotto (%)</span>
+                            <input type="number" id="investGrowth" min="0" step="0.1" inputmode="decimal" placeholder="%">
+                        </label>
+                    </div>
+
+                    <!-- Link to category -->
+                    <label class="field-row">
+                        <span>Linkitä budjettiin</span>
+                        <select id="entityLinkedCategory">
+                            <option value="">— Ei linkitystä —</option>
+                        </select>
+                        <span class="field-hint">Linkitetyt kategoriat vaikuttavat tulevaisuuden laskelmiin</span>
+                    </label>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" data-close-modal>Peruuta</button>
+                    <button type="button" class="btn-danger" id="deleteEntityBtn" style="display:none">Poista</button>
+                    <button type="submit" class="btn-primary" id="saveEntityBtn">Tallenna</button>
+                </div>
+            </form>
+        </dialog>
     </main>
 
     <script type="module" src="app.js"></script>
