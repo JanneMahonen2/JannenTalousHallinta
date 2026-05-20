@@ -1,22 +1,85 @@
-
 <!DOCTYPE html>
 <html lang="fi">
 <head>
     <meta charset="UTF-8">
-    <title>JannenTalousHallinta</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jannen Taloushallinta</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <main class="app">
+        <header>
+            <div class="header-row">
+                <div>
+                    <h1>Jannen Taloushallinta</h1>
+                    <p class="tagline">Jaa käytettävät varat kategorioihin — vedä palkkia tai säädä liukuja. Muutokset tallentuvat selaimeesi automaattisesti.</p>
+                </div>
+                <div class="header-actions">
+                    <button type="button" id="exportBtn" title="Lataa tila JSON-tiedostona">Vie tiedostoon</button>
+                    <button type="button" id="importBtn" title="Lataa tila JSON-tiedostosta">Tuo tiedostosta</button>
+                    <button type="button" id="resetBtn" class="danger" title="Palauta oletukset">Nollaa</button>
+                    <input type="file" id="importFile" accept="application/json,.json" hidden>
+                </div>
+            </div>
+        </header>
 
-    <h1>Jannen Taloushallinta</h1>
+        <section class="presets">
+            <label class="preset-pick">
+                <span>Esivalinta</span>
+                <select id="presetSelect">
+                    <option value="">— Valitse —</option>
+                </select>
+            </label>
+            <button type="button" id="savePresetBtn">+ Tallenna nykyinen</button>
+            <button type="button" id="renamePresetBtn" disabled>Nimeä uudelleen</button>
+            <button type="button" id="deletePresetBtn" class="danger" disabled>Poista valittu</button>
+        </section>
 
-    <div class="container">
-        <h2>Yhteenveto</h2>
-        <p>Tulot: <span id="income">0 €</span></p>
-        <p>Menot: <span id="expenses">0 €</span></p>
-        <p>Saldo: <span id="balance">0 €</span></p>
-    </div>
+        <section class="controls">
+            <label class="income-input">
+                <span>Käytettävät varat</span>
+                <input type="number" id="income" min="0" step="10" inputmode="numeric">
+                <span class="currency">€</span>
+            </label>
 
-    <script src="app.js"></script>
+            <div class="period-switch" role="group" aria-label="Budjettijakso">
+                <button type="button" data-period="week">Viikko</button>
+                <button type="button" data-period="month">Kuukausi</button>
+                <button type="button" data-period="year">Vuosi</button>
+            </div>
+        </section>
+
+        <section class="bar-section">
+            <div class="bar" id="bar" aria-label="Budjettipalkki"></div>
+            <p class="bar-hint">Vedä jakajaviivoja siirtääksesi euroja kahden kategorian välillä — kokonaissumma säilyy samana. Kun nostat liukua, muut kategoriat kutistuvat automaattisesti niin ettei Jaettu ylitä käytettäviä varoja.</p>
+        </section>
+
+        <section class="categories">
+            <div class="categories-head">
+                <h2>Kategoriat</h2>
+                <button type="button" id="addCategory">+ Lisää kategoria</button>
+            </div>
+            <ul id="categoryList"></ul>
+        </section>
+
+        <section class="summary">
+            <div>
+                <span class="summary-label">Käytettävät varat</span>
+                <strong id="sumIncome">0 €</strong>
+            </div>
+            <div>
+                <span class="summary-label">Jaettu</span>
+                <strong id="sumExpenses">0 €</strong>
+            </div>
+            <div>
+                <span class="summary-label">Jäljellä</span>
+                <strong id="sumRemaining">0 €</strong>
+            </div>
+        </section>
+
+        <p class="save-status" id="saveStatus" aria-live="polite"></p>
+    </main>
+
+    <script type="module" src="app.js"></script>
 </body>
 </html>

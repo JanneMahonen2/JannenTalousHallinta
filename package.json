@@ -1,0 +1,15 @@
+{
+  "name": "jannentaloushallinta",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Henkilökohtainen taloudenhallintasovellus",
+  "scripts": {
+    "dev": "vite",
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
