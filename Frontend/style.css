@@ -1009,6 +1009,54 @@ header h1 {
     text-align: center;
     font-weight: 700;
 }
+.assessment-horizon-net {
+    font-weight: 600;
+    color: #0f172a;
+}
+.assessment-horizon-interest {
+    color: #b45309;
+}
+.assessment-horizon-risk {
+    color: #6366f1;
+}
+.assessment-horizon-extra-risk {
+    color: #7c3aed;
+    font-weight: 600;
+}
+.interest-savings {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 500;
+    margin-top: 2px;
+}
+.interest-savings.positive {
+    color: #15803d;
+}
+.interest-savings.negative {
+    color: #b91c1c;
+}
+.assessment-horizon-edge {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.assessment-horizon-edge.positive {
+    color: #15803d;
+    background: rgba(34, 197, 94, 0.08);
+}
+.assessment-horizon-edge.negative {
+    color: #b91c1c;
+    background: rgba(239, 68, 68, 0.08);
+}
+.assessment-horizon-delta {
+    font-size: 10px;
+    font-weight: 400;
+}
+.assessment-horizon-delta.positive {
+    color: #15803d;
+}
+.assessment-horizon-delta.negative {
+    color: #b91c1c;
+}
 .assessment-horizon-note {
     margin-top: 6px;
     font-size: 11px;

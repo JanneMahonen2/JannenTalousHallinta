@@ -2487,15 +2487,33 @@ function assessBestStrategy(loan, investments, baseLoanMonthly, baseInvMonthlies
     };
     const simulateShift = (signedShift) => simulateShiftAt(signedShift, 0);
     const simulateShiftAdj = (signedShift) => simulateShiftAt(signedShift, investRiskAdjFn);
+    const riskPctForBand = (typeof compareState.risk === 'number' && compareState.risk >= 0)
+        ? compareState.risk
+        : Math.max(0, Math.round(weightedSigma / 2));
+    const simulateShiftLow = (signedShift) => simulateShiftAt(signedShift, -riskPctForBand);
+    const simulateShiftHigh = (signedShift) => simulateShiftAt(signedShift, +riskPctForBand);
+    const netAt = (sim, hm) => sim.points[hm].inv - sim.points[hm].loan;
+    const riskHalfAt = (lowSim, highSim, hm) => Math.max(0, (netAt(highSim, hm) - netAt(lowSim, hm)) / 2);
 
     // Sample baseline (nominal — for display / current-horizon gain) and
     // adj-baseline (for minimax scoring).
     const baselineSim = simulateShift(0);
-    const baselineNetAt = (hm) => baselineSim.points[hm].inv - baselineSim.points[hm].loan;
+    const baselineNetAt = (hm) => netAt(baselineSim, hm);
     const baselineNet = baselineNetAt(horizonMonths);
 
     const baselineSimAdj = simulateShiftAdj(0);
-    const baselineNetAtAdj = (hm) => baselineSimAdj.points[hm].inv - baselineSimAdj.points[hm].loan;
+    const baselineNetAtAdj = (hm) => netAt(baselineSimAdj, hm);
+
+    // Nopein lainanlyhennyspolku toimii päätösriskin vertailupohjana. Sen
+    // sisältämä sijoitusriski syntyy joka tapauksessa lainan jälkeen, joten
+    // käyttäjälle arvokkain lisäluku on paljonko valittu jako kasvattaa sitä.
+    const fastestLoanShift = -maxLoanShift;
+    const fastestLoanSim = simulateShift(fastestLoanShift);
+    const fastestLoanSimAdj = simulateShiftAdj(fastestLoanShift);
+    const fastestLoanLow = simulateShiftLow(fastestLoanShift);
+    const fastestLoanHigh = simulateShiftHigh(fastestLoanShift);
+    const fastestRiskHalfAt = (hm) => riskHalfAt(fastestLoanLow, fastestLoanHigh, hm);
+    const fastestInterestAt = (hm) => fastestLoanSim.points[hm].interest || 0;
 
     // Candidate grid across slider range.
     const span = maxLoanShift + maxInvestShift;
@@ -2506,15 +2524,21 @@ function assessBestStrategy(loan, investments, baseLoanMonthly, baseInvMonthlies
     }
 
     // For each candidate: ADJ-rate sim → relative gain vs adj-baseline at each
-    // horizon. Score = minimum gain across horizons (minimax — pessimistinen).
-    // Tie-breaker: keskimääräinen voitto. Adj-sim valitsee oikean suunnan
-    // myös kun nominaali tuotto pettää σ-haircutin jälkeen.
+    // horizon, plus decision-risk metrics vs the fastest loan plan. The final
+    // pick optimizes risk-adjusted benefit after penalizing extra volatility
+    // and extra interest. This keeps "more investing" from winning only because
+    // the total risk band is large for reasons the decision did not create.
+    const riskEuroWeight = 0.35;
+    const extraInterestWeight = 0.10;
     const candidateScores = [];
     candidates.forEach(shift => {
         const clamped = Math.max(-maxLoanShift, Math.min(maxInvestShift, shift));
         const sim = simulateShiftAdj(clamped);
+        const nominalSim = simulateShift(clamped);
+        const lowSim = simulateShiftLow(clamped);
+        const highSim = simulateShiftHigh(clamped);
         const gainsAbs = horizonsMonths.map(hm => {
-            const net = sim.points[hm].inv - sim.points[hm].loan;
+            const net = netAt(sim, hm);
             return net - baselineNetAtAdj(hm);
         });
         const gainsRel = horizonsMonths.map((hm, i) => {
@@ -2523,11 +2547,46 @@ function assessBestStrategy(loan, investments, baseLoanMonthly, baseInvMonthlies
         });
         const worstCaseRel = Math.min(...gainsRel);
         const avgCaseRel = gainsRel.reduce((s, g) => s + g, 0) / gainsRel.length;
-        candidateScores.push({ shift: clamped, gainsAbs, gainsRel, worstCaseRel, avgCaseRel });
+        const decisionScores = horizonsMonths.map(hm => {
+            const adjGainVsFastest = netAt(sim, hm) - netAt(fastestLoanSimAdj, hm);
+            const extraRisk = Math.max(0, riskHalfAt(lowSim, highSim, hm) - fastestRiskHalfAt(hm));
+            const extraInterest = Math.max(0, (nominalSim.points[hm].interest || 0) - fastestInterestAt(hm));
+            const scoreAbs = adjGainVsFastest - extraRisk * riskEuroWeight - extraInterest * extraInterestWeight;
+            const base = Math.max(1000, Math.abs(netAt(fastestLoanSimAdj, hm)));
+            return {
+                scoreRel: scoreAbs / base,
+                adjGainVsFastest,
+                extraRisk,
+                extraInterest,
+            };
+        });
+        const worstDecisionRel = Math.min(...decisionScores.map(s => s.scoreRel));
+        const avgDecisionRel = decisionScores.reduce((s, row) => s + row.scoreRel, 0) / decisionScores.length;
+        const totalDecisionGain = decisionScores.reduce((s, row) => s + row.adjGainVsFastest, 0);
+        const totalDecisionCost = decisionScores.reduce((s, row) => s + row.extraRisk + row.extraInterest * extraInterestWeight, 0);
+        const efficiency = totalDecisionGain / Math.max(1, totalDecisionCost);
+        const avgExtraRisk = decisionScores.reduce((s, row) => s + row.extraRisk, 0) / decisionScores.length;
+        candidateScores.push({
+            shift: clamped,
+            gainsAbs,
+            gainsRel,
+            worstCaseRel,
+            avgCaseRel,
+            worstDecisionRel,
+            avgDecisionRel,
+            efficiency,
+            avgExtraRisk,
+        });
     });
 
-    // Robust pick (minimax): paras pahimmassa aikajaksossa. Tie-break keskiarvo.
-    candidateScores.sort((a, b) => (b.worstCaseRel - a.worstCaseRel) || (b.avgCaseRel - a.avgCaseRel));
+    // Robust pick: paras päätösriskikorjattu piste pahimmassa aikajaksossa.
+    // Tie-break keskiarvo, tehokkuus ja lopuksi pienempi lisäriski.
+    candidateScores.sort((a, b) =>
+        (b.worstDecisionRel - a.worstDecisionRel)
+        || (b.avgDecisionRel - a.avgDecisionRel)
+        || (b.efficiency - a.efficiency)
+        || (a.avgExtraRisk - b.avgExtraRisk)
+    );
     const robust = candidateScores[0];
     const bestShift = robust.shift;
     // bestNet käyttää NOMINAL-simulaatiota (näytön johdonmukaisuutta varten).
@@ -2541,62 +2600,95 @@ function assessBestStrategy(loan, investments, baseLoanMonthly, baseInvMonthlies
     const expectedSpread = weightedRawReturn - loanRate;
     const riskAdjustedSpread = weightedAdjReturn - loanRate;
 
-    // Balanced "early-career, stable income" model:
-    // - Use robust (minimax) shift as direction, with same dampening as before.
-    // - Dampening + risk-adjusted spread brake keep recommendation conservative.
-    //   Krypto-tyypillinen sigma 60 % → preemio 10,8 % → riskAdjustedSpread negatiivinen
-    //   → riskBrake painaa balancedShift huomattavasti alemmas vaikka raw best olisi sama.
-    const horizonYears = horizonMonths / 12;
-    const directionMax = bestShift > 0 ? maxInvestShift : bestShift < 0 ? maxLoanShift : 0;
-    const directionCap = bestShift > 0
-        ? (horizonYears >= 10 ? 0.45 : 0.30)
-        : (loanRate <= 4 ? 0.35 : 0.55);
-    const gainConviction = directionMax > 0
-        ? Math.min(1, Math.abs(bestNet - baselineNet) / Math.max(1, directionMax * horizonYears * 1.2))
-        : 0;
-    const spreadConviction = Math.min(1, Math.abs(expectedSpread) / 2);
-    const riskBrake = bestShift > 0 && riskAdjustedSpread < 0
-        ? Math.max(0.25, 1 + riskAdjustedSpread / 6)
-        : 1;
-    const conviction = Math.max(0.15, (gainConviction * 0.7 + spreadConviction * 0.3) * riskBrake);
-    let balancedShift = Math.round(Math.sign(bestShift) * directionMax * directionCap * conviction);
-    if (Math.abs(bestNet - baselineNet) < 5 || Math.abs(balancedShift) < 1) balancedShift = 0;
+    // Suositus: bestShift on päätösriskikorjatun pisteytyksen kohde. Se on
+    // absoluuttinen tavoite samalla setupilla; nykyinen slider kertoo vain
+    // kuinka kaukana käyttäjä on siitä.
+    let balancedShift = bestShift;
 
-    // Horisontti-taulukko: lasketaan AINA balancedShift:lle (= se mitä käyttäjälle
-    // suositellaan). Aiemmin näytettiin raw bestShift:n voitot, mutta krypto vs
-    // indeksi -tapauksessa raw best on sama (561 €/kk koska simulaattori käyttää
-    // rate-arvoa eikä σ:aa), joten taulukko ei muuttunut σ:n mukaan vaikka
-    // balancedShift muuttui 252 → 80 €/kk. Nyt taulukko vastaa suositusta.
-    const sampleHorizons = (signedShift) => {
-        const sim = signedShift === 0 ? baselineSim : simulateShift(signedShift);
-        const gainsAbs = horizonsMonths.map(hm => {
-            const net = sim.points[hm].inv - sim.points[hm].loan;
-            return net - baselineNetAt(hm);
-        });
-        const gainsRel = horizonsMonths.map((hm, i) => {
-            const base = Math.abs(baselineNetAt(hm));
-            return base > 1 ? gainsAbs[i] / base : 0;
-        });
-        return { gainsAbs, gainsRel };
-    };
-    // Sample current slider position (compareState.shift) — taulukko liikkuu sliderin
-    // mukana. Suosituksen omat luvut säilyvät erillisinä field:eissä jotta UI voi
-    // näyttää molemmat tarpeen mukaan.
+    // Konvergenssikynnys: jos ehdotus on liian pieni (esim. käyttäjä on jo
+    // optimin reunalla), tulkitaan 'nykyinen jako on riittävä'.
+    const totalBudget = baseLoanMonthly + totalInv;
+    const minMeaningfulShift = Math.max(20, Math.round(totalBudget * 0.02));
+    if (Math.abs(balancedShift) < minMeaningfulShift) {
+        balancedShift = 0;
+    }
+
+    // Absoluuttinen target — sama riippumatta nykyisestä jaosta samalla setupilla.
+    // Tämä kerrotaan käyttäjälle UI:ssa jotta hän näkee mihin allokaatioon malli
+    // tähtää, eikä vain "siirrä +X €/kk".
+    const targetLoanMonthly = Math.max(0, Math.min(totalBudget, baseLoanMonthly + balancedShift));
+    const targetInvestMonthly = Math.max(0, totalBudget - targetLoanMonthly);
+    const targetLoanRatio = totalBudget > 0 ? targetLoanMonthly / totalBudget : 0;
+
+    // Horisontti-taulukko: lasketaan nykyiselle sliderin asennolle (compareState.shift)
+    // ja näytetään absoluuttiset taloudelliset arvot — ei vain "voitto vs nyk".
+    // Tämä on käyttäjälle informatiivisempi: näkee nettovarallisuuden, korkokulut
+    // ja riski-alueen leveyden joka horisontissa.
     const currentShift = Math.max(-maxLoanShift, Math.min(maxInvestShift, Number(compareState.shift) || 0));
-    const currentSample = sampleHorizons(currentShift);
-    const horizonBreakdown = horizonsMonths.map((hm, i) => ({
-        years: Math.round(hm / 12),
-        gainAbs: currentSample.gainsAbs[i],
-        gainRel: currentSample.gainsRel[i],
-    }));
-    const currentWorstCaseRel = Math.min(...currentSample.gainsRel);
-    const currentAvgCaseRel = currentSample.gainsRel.reduce((s, g) => s + g, 0) / currentSample.gainsRel.length;
+
+    const currentSim = currentShift === 0 ? baselineSim : simulateShift(currentShift);
+    const currentSimLow = simulateShiftLow(currentShift);
+    const currentSimHigh = simulateShiftHigh(currentShift);
+
+    const horizonBreakdown = horizonsMonths.map(hm => {
+        const p = currentSim.points[hm];
+        const pLow = currentSimLow.points[hm];
+        const pHigh = currentSimHigh.points[hm];
+        const net = p.inv - p.loan;
+        const baselineNetH = baselineNetAt(hm);
+        const lowNet = pLow.inv - pLow.loan;
+        const highNet = pHigh.inv - pHigh.loan;
+        const riskHalf = Math.max(0, (highNet - lowNet) / 2);
+        const referenceRiskHalf = fastestRiskHalfAt(hm);
+        const extraRiskHalf = riskHalf - referenceRiskHalf;
+        const gainAbsH = net - baselineNetH;
+        // Säästetty korko vs nykyinen jako: positiivinen kun skenaario maksaa
+        // vähemmän korkoa kumulatiivisesti. Tämä on VARMA hyöty (lainakorko on
+        // sopimuksellinen), toisin kuin sijoituksen compounding-tuotto.
+        const baselineInterestH = baselineSim.points[hm].interest || 0;
+        const scenarioInterest = p.interest || 0;
+        const interestSavings = baselineInterestH - scenarioInterest;
+        // Hyöty-pisteytys: netto-edge baselineen verrattuna + säästetty korko
+        // (vain positiivinen — varma hyöty) − lisäriskin rangaistus.
+        // Säästetty korko lasketaan erikseen koska NetChange:n compounding-osuus
+        // on epävarma, mutta korkokuluerojen säästö on sopimuksellisesti varma.
+        // Tämä antaa lainaa lyhentäville skenaarioille reilumman pisteytyksen
+        // lyhyellä aikavälillä, ennen kuin compounding ehtii kompensoida.
+        const edge = gainAbsH + Math.max(0, interestSavings) - 0.35 * Math.max(0, extraRiskHalf);
+        return {
+            years: Math.round(hm / 12),
+            inv: p.inv,
+            loanBalance: p.loan,
+            interest: scenarioInterest,
+            interestSavings,
+            net,
+            gainAbs: gainAbsH,
+            gainRel: Math.abs(baselineNetH) > 1 ? gainAbsH / Math.abs(baselineNetH) : 0,
+            riskLow: lowNet,
+            riskHigh: highNet,
+            riskBand: highNet - lowNet,
+            riskHalf,
+            referenceRiskHalf,
+            extraRiskHalf,
+            extraInterestVsFastest: scenarioInterest - fastestInterestAt(hm),
+            edge,
+        };
+    });
+
+    const gainsRelArr = horizonBreakdown.map(h => h.gainRel);
+    const currentWorstCaseRel = Math.min(...gainsRelArr);
+    const currentAvgCaseRel = gainsRelArr.reduce((s, g) => s + g, 0) / gainsRelArr.length;
 
     // Suosituksen omat luvut säilytetään erikseen (vaikka taulukossa näytetään
     // nykyinen slider) jos UI haluaa kertoa "suosituksen pahimman aikajakson voitto".
-    const balancedSample = balancedShift === currentShift ? currentSample : sampleHorizons(balancedShift);
-    const balancedWorstCaseRel = Math.min(...balancedSample.gainsRel);
-    const balancedAvgCaseRel = balancedSample.gainsRel.reduce((s, g) => s + g, 0) / balancedSample.gainsRel.length;
+    const balancedSim = balancedShift === currentShift ? currentSim : (balancedShift === 0 ? baselineSim : simulateShift(balancedShift));
+    const balancedGains = horizonsMonths.map(hm => {
+        const net = balancedSim.points[hm].inv - balancedSim.points[hm].loan;
+        const baseNet = baselineNetAt(hm);
+        return Math.abs(baseNet) > 1 ? (net - baseNet) / Math.abs(baseNet) : 0;
+    });
+    const balancedWorstCaseRel = Math.min(...balancedGains);
+    const balancedAvgCaseRel = balancedGains.reduce((s, g) => s + g, 0) / balancedGains.length;
 
     return {
         shift: balancedShift,
@@ -2616,12 +2708,20 @@ function assessBestStrategy(loan, investments, baseLoanMonthly, baseInvMonthlies
         perEntity,
         hasRiskyInvest: investments.some(inv => inv.type === 'investment'),
         horizonBreakdown,
+        riskPctForBand,
         robustWorstCaseRel: currentWorstCaseRel,
         robustAvgCaseRel: currentAvgCaseRel,
         balancedWorstCaseRel,
         balancedAvgCaseRel,
         rawWorstCaseRel: robust.worstCaseRel,
         rawAvgCaseRel: robust.avgCaseRel,
+        decisionWorstCaseRel: robust.worstDecisionRel,
+        decisionAvgCaseRel: robust.avgDecisionRel,
+        decisionEfficiency: robust.efficiency,
+        targetLoanMonthly,
+        targetInvestMonthly,
+        targetLoanRatio,
+        totalBudget,
     };
 }
 
@@ -2635,7 +2735,7 @@ function renderAssessment(best) {
     const fmt = (n) => n.toFixed(2).replace('.', ',');
     const fmtSigned = (n) => (n >= 0 ? '+' : '−') + fmt(Math.abs(n));
 
-    const title = '💡 Suositus (beta) — minimax (robusti kaikissa horisonteissa)';
+    const title = '💡 Suositus (beta) — nettohyöty vs. lisäriski';
 
     // Per-entity breakdown so user sees WHERE the premium comes from
     const perEntityRows = best.perEntity.map(p => {
@@ -2647,41 +2747,78 @@ function renderAssessment(best) {
 
     const riskNote = `Painotettu tuotto <strong>${fmt(best.rawInvestReturn)} %</strong>, riskikorjattu <strong>${fmt(best.adjInvestReturn)} %</strong> (preemio ${fmt(best.weightedPremium)} %, σ ${fmt(best.weightedSigma)} %).`;
 
-    // Horisontti-erittely: näytä käyttäjälle kuinka paljon valittu shift voittaa
-    // baselinen kullakin aikajaksolla. Tämä auttaa ymmärtämään että suositus on
-    // robusti — ei riipu sattumalta käyttäjän valitsemasta horisontista.
+    // Horisonttitaulukko näyttää nyt absoluuttiset taloudelliset arvot nykyiselle
+    // sliderin asennolle: nettovarallisuus, lainan jäljellä, kertynyt korkokulu,
+    // ja riski-alueen leveys (±). Tämä on paljon informatiivisempi kuin pelkkä
+    // "voitto vs. nyk." (joka oli aina 0 kun slider on nollassa).
     const fmtPctSigned = (rel) => {
         const pct = rel * 100;
         const sign = pct >= 0 ? '+' : '−';
         return `${sign}${Math.abs(pct).toFixed(1).replace('.', ',')} %`;
     };
     const horizonRows = (best.horizonBreakdown || []).map(h => {
-        const cls = h.gainRel >= 0 ? 'positive' : 'negative';
-        const winLabel = h.gainRel >= 0 ? '✓' : '✗';
+        // Korkokulu on aina negatiivinen lopputulokselle → näytä −X €.
+        // Lisäksi näytetään ero baselineen: 'säästöä +X' tai 'lisää −X' jotta
+        // käyttäjä näkee selvästi paljonko kk-erää säätämällä vältetään korkoja.
+        const interestStr = h.interest > 0 ? `−${euro(Math.round(h.interest))}` : '0 €';
+        const savingsRounded = Math.round(h.interestSavings || 0);
+        const savingsAnnotation = savingsRounded >= 1
+            ? `<span class="interest-savings positive">säästöä +${euro(savingsRounded)}</span>`
+            : savingsRounded <= -1
+                ? `<span class="interest-savings negative">lisää −${euro(Math.abs(savingsRounded))}</span>`
+                : '';
+        // Riski-alue puolikkaana (±) jotta numero on luettavampi. Lisäriski
+        // erottaa päätöksen tuoman heilunnan nopeimpaan lainapolkuun nähden.
+        const riskHalf = Math.round(h.riskHalf ?? (h.riskBand / 2));
+        const extraRiskHalf = Math.round(Math.max(0, h.extraRiskHalf || 0));
+        const extraRiskStr = Math.abs(extraRiskHalf) < 1
+            ? '±0 €'
+            : `+±${euro(extraRiskHalf)}`;
+        // Näytä delta-summa aina kun se on merkityksellinen (≥1 €). Aiempi
+        // 0.1 %-kynnys piilotti deltan pitkillä horisonteilla joissa muutos
+        // on absoluuttisesti pieni mutta käyttäjälle silti informatiivinen.
+        const gainAbsRounded = Math.round(h.gainAbs);
+        const deltaCls = gainAbsRounded > 0 ? 'positive' : gainAbsRounded < 0 ? 'negative' : '';
+        const deltaSpan = Math.abs(gainAbsRounded) >= 1
+            ? `<span class="assessment-horizon-delta ${deltaCls}"> (${gainAbsRounded > 0 ? '+' : '−'}${euro(Math.abs(gainAbsRounded))})</span>`
+            : '';
+        // Hyöty-sarake: yhteenveto netto-vaikutuksesta vähennettynä lisäriski-
+        // sakolla. Positiivinen → liu'uttimen asento tuo enemmän nettohyötyä
+        // kuin lisäriski maksaa; negatiivinen → menettää hyödyn riskin
+        // tarkastelun jälkeen.
+        const edgeRounded = Math.round(h.edge || 0);
+        const edgeCls = edgeRounded > 0 ? 'positive' : edgeRounded < 0 ? 'negative' : '';
+        const edgeStr = Math.abs(edgeRounded) < 1
+            ? '0 €'
+            : `${edgeRounded > 0 ? '+' : '−'}${euro(Math.abs(edgeRounded))}`;
         return `<tr>
             <td>${h.years} v</td>
-            <td class="assessment-horizon-gain ${cls}">${fmtPctSigned(h.gainRel)}</td>
-            <td class="assessment-horizon-eur ${cls}">${h.gainAbs >= 0 ? '+' : '−'}${euro(Math.round(Math.abs(h.gainAbs)))}</td>
-            <td class="assessment-horizon-mark ${cls}">${winLabel}</td>
+            <td class="assessment-horizon-net">${euro(Math.round(h.net))}${deltaSpan}</td>
+            <td class="assessment-horizon-interest">${interestStr}${savingsAnnotation ? `<br>${savingsAnnotation}` : ''}</td>
+            <td class="assessment-horizon-risk">±${euro(riskHalf)}</td>
+            <td class="assessment-horizon-extra-risk">${extraRiskStr}</td>
+            <td class="assessment-horizon-edge ${edgeCls}" title="Netto-edge (vs. nykyinen jako) + säästetty korko − 0.35 × lisäriski">${edgeStr}</td>
         </tr>`;
     }).join('');
     // Taulukon otsikko reflektoi sliderin nykyistä asentoa (liikkuu sen mukana).
-    // Jos slider on nollassa, taulukko näyttää baseline = baseline (kaikki 0). Jos
-    // slider on suosituksessa, taulukko näyttää suosituksen voitot.
     const cur = Number(best.currentShift) || 0;
     const horizonTableSubtitle = cur === 0
-        ? 'liu’utin nollassa — voitto = 0 €'
+        ? 'liu’utin: nykyinen jako'
         : (cur > 0
             ? `liu’utin: sijoituksiin +${euro(cur)}/kk`
             : `liu’utin: lainaan +${euro(Math.abs(cur))}/kk`);
+    const riskPctLabel = best.riskPctForBand ? `±${best.riskPctForBand} %` : '';
+    const noteLine = cur === 0
+        ? `Nykyinen jako: nettovarallisuus 20v päästä <strong>${euro(Math.round(best.horizonBreakdown[3]?.net || 0))}</strong> · kumulatiiviset lainan korkokulut <strong>${euro(Math.round(best.horizonBreakdown[3]?.interest || 0))}</strong>.`
+        : `Vrt. nykyiseen jakoon: voitto pahimmassa horisontissa <strong>${fmtPctSigned(best.robustWorstCaseRel)}</strong>, keskiarvo <strong>${fmtPctSigned(best.robustAvgCaseRel)}</strong>. Lisäriski on erotus nopeimpaan lainanlyhennyspolkuun.`;
     const horizonTable = horizonRows
         ? `<div class="assessment-horizon-section">
-              <div class="assessment-horizon-title">Voitto vs. nykyinen jako eri aikajaksoissa <span class="assessment-horizon-subtitle">(${horizonTableSubtitle})</span></div>
+              <div class="assessment-horizon-title">Skenaarion luvut eri aikajaksoissa <span class="assessment-horizon-subtitle">(${horizonTableSubtitle})</span></div>
               <table class="assessment-horizon-table">
-                  <thead><tr><th>Aika</th><th>%</th><th>€</th><th></th></tr></thead>
+                  <thead><tr><th>Aika</th><th>Netto</th><th>Korkokulu</th><th>Riski ${riskPctLabel}</th><th>Lisäriski</th><th title="Netto-vaikutus vs. nykyinen jako miinus lisäriski-sakko (0.35×)">Hyöty</th></tr></thead>
                   <tbody>${horizonRows}</tbody>
               </table>
-              <div class="assessment-horizon-note">Pahimman aikajakson suht. voitto: <strong>${fmtPctSigned(best.robustWorstCaseRel)}</strong> · keskiarvo: <strong>${fmtPctSigned(best.robustAvgCaseRel)}</strong></div>
+              <div class="assessment-horizon-note">${noteLine}</div>
           </div>`
         : '';
 
@@ -2689,9 +2826,11 @@ function renderAssessment(best) {
     const recommendationIsNeutral = shiftAbs < 1 || Math.abs(best.gain) < 1;
     let recommendation;
     if (recommendationIsNeutral) {
-        recommendation = `Tasapainoisin jako tällä aikajaksolla on <strong>nykyinen jako</strong> (siirto 0 €/kk).`;
+        recommendation = `Optimaalinen jako tällä setupilla on <strong>nykyinen jako</strong>.`;
     } else {
-        recommendation = `Tasapainoisin jako: <strong>${euro(shiftAbs)}/kk ${direction}</strong>. (Odotusarvon ääriratkaisu olisi ${best.rawBestShift > 0 ? 'sijoituksiin' : 'lainaan'} ${euro(Math.abs(best.rawBestShift))}/kk, mutta vaimennettu riskin, likviditeetin ja hajautuksen takia.)`;
+        const targetPct = Math.round((best.targetLoanRatio || 0) * 100);
+        const investPct = 100 - targetPct;
+        recommendation = `Optimaalinen jako tällä setupilla: <strong>Laina ${euro(Math.round(best.targetLoanMonthly))}/kk (${targetPct} %)</strong>, <strong>Sijoitukset ${euro(Math.round(best.targetInvestMonthly))}/kk (${investPct} %)</strong>. → Nykyisestä tästä päästään siirtämällä <strong>${euro(shiftAbs)}/kk ${direction}</strong>.`;
     }
 
     // Vertaa nykyiseen liukurin asentoon → kerro käyttäjälle paljonko ja mihin
@@ -2718,7 +2857,7 @@ function renderAssessment(best) {
         <div class="assessment-line">${recommendation}</div>
         ${horizonTable}
         <div class="assessment-line assessment-position-line">${positionLine}</div>
-        <div class="assessment-footnote">Suunta valitaan <strong>riskikorjatulla</strong> minimax-pisteytyksellä: jokaisen sijoituksen tuotosta vähennetään σ-pohjainen preemio (esim. krypto 10 % − 10,8 % ≈ 0 %), ja shift joka voittaa pahimmankin aikajakson (5–30 v) yli valitaan. Näin korkeariskinen sijoitus ei vedä suositusta vain nominaaliluvun perusteella. Horisonttitaulukko näyttää nominaaliset projektiot (vastaa Vertailu-näkymää). Tämän jälkeen tulos vaimennetaan riskin, likviditeetin ja hajautuksen takia. Tämä ei ole henkilökohtaista sijoitusneuvontaa.</div>
+        <div class="assessment-footnote">Suunta valitaan <strong>riskikorjatulla</strong> pisteytyksellä: jokaisen sijoituksen tuotosta vähennetään σ-pohjainen preemio, ja kandidaatit pisteytetään nopeimpaan lainanlyhennyspolkuun verrattuna. Malli palkitsee riskikorjattua nettohyötyä mutta rankaisee päätöksen tuomasta lisäriskistä ja ylimääräisestä korkokulusta. Horisonttitaulukko näyttää nominaaliset projektiot (vastaa Vertailu-näkymää). Tämä ei ole henkilökohtaista sijoitusneuvontaa.</div>
     `;
 
     $compareAssessment.style.display = '';
