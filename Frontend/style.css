@@ -358,9 +358,18 @@ header h1 {
     gap: 10px;
     padding: 10px 0;
     border-bottom: 1px solid #f1f5f9;
+    transition: background 0.3s ease;
 }
 .category-item:last-child {
     border-bottom: none;
+}
+.category-item.cat-capped {
+    background: #fef3c7;
+    animation: cat-cap-flash 0.7s ease-out;
+}
+@keyframes cat-cap-flash {
+    0% { background: #fbbf24; }
+    100% { background: #fef3c7; }
 }
 .category-item input[type="color"] {
     width: 32px;
@@ -500,6 +509,28 @@ header h1 {
 #addCategory:hover {
     border-color: #4f46e5;
     color: #4f46e5;
+}
+.categories-footer {
+    margin-top: 12px;
+    display: flex;
+    justify-content: center;
+}
+.add-category-bottom {
+    background: transparent;
+    border: 1px dashed #cbd5e1;
+    padding: 10px 20px;
+    border-radius: 8px;
+    color: #475569;
+    cursor: pointer;
+    font-size: 14px;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    width: 100%;
+    max-width: 400px;
+}
+.add-category-bottom:hover {
+    border-color: #4f46e5;
+    color: #4f46e5;
+    background: #eef2ff;
 }
 
 /* --- Summary --- */
@@ -938,6 +969,11 @@ header h1 {
     font-weight: 600;
     color: #475569;
     margin-bottom: 6px;
+}
+.assessment-horizon-subtitle {
+    font-weight: 400;
+    color: #94a3b8;
+    margin-left: 4px;
 }
 .assessment-horizon-table {
     width: 100%;
@@ -1554,6 +1590,104 @@ header h1 {
 @media (max-width: 720px) {
     .compare-setup {
         grid-template-columns: 1fr;
+    }
+}
+
+/* ===== MOBILE: puhelin (kapeampi näyttö) ===== */
+@media (max-width: 640px) {
+    .compare-chart-wrap {
+        padding: 10px;
+    }
+    .compare-chart-title {
+        font-size: 14px;
+    }
+    .compare-summary {
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+    .compare-summary-item {
+        flex-wrap: wrap;
+    }
+    /* Vertailu-näkymän nimi-Sliderit + arvot puhelimessa */
+    .compare-slider-label {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    .compare-slider-value {
+        font-size: 14px;
+    }
+    .compare-slider-ends {
+        font-size: 11px;
+    }
+    .compare-shift-half input[type="range"],
+    .compare-risk-track input[type="range"],
+    .compare-horizon-slider input[type="range"] {
+        height: 40px; /* iso kosketuspinta */
+    }
+    .compare-assessment {
+        padding: 12px;
+        font-size: 14px;
+    }
+    .assessment-horizon-table {
+        font-size: 12px;
+    }
+    .impact-net-value {
+        font-size: 22px;
+    }
+    .impact-box {
+        padding: 12px;
+    }
+    .compare-release-toggle {
+        font-size: 13px;
+    }
+    .compare-release-toggle .field-hint {
+        flex-basis: 100%;
+        margin-left: 24px;
+    }
+}
+
+/* Sliderin thumb-tyylit (cross-browser) — iso kosketuspinta puhelimelle.
+   Toimii kaikilla sliderin instansseilla, Budjetti + Vertailu + Riski. */
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #4f46e5;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+    border: 2px solid white;
+    margin-top: -8px;
+}
+input[type="range"]::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #4f46e5;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+    border: 2px solid white;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: #e2e8f0;
+}
+input[type="range"]::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: #e2e8f0;
+}
+@media (max-width: 640px) {
+    input[type="range"]::-webkit-slider-thumb {
+        width: 28px;
+        height: 28px;
+        margin-top: -11px;
+    }
+    input[type="range"]::-moz-range-thumb {
+        width: 28px;
+        height: 28px;
     }
 }
 

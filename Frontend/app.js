@@ -221,19 +221,23 @@ function shrinkProportionally(items, newTotal) {
 
 /**
  * Set a category to `requested` €.
- * - Uses the unallocated remainder (Jakamaton) as the first buffer for increases.
- * - Only shrinks other UNLOCKED categories when the remainder is fully consumed.
- * - Locked categories never shrink as a side effect of another category growing.
+ * - Uses the unallocated remainder (Jakamaton) as the buffer for increases.
+ * - HARD CAP: does NOT shrink other categories to make room. If user wants more,
+ *   they must reduce another category first. Tämä on käyttäjäystävällisempää
+ *   kuin push-käyttäytyminen jossa pieni input-virhe sotki useamman kategorian.
+ *   Returns true if the requested amount was capped (caller voi näyttää palautteen).
  */
 function setCategoryAmount(catId, requested) {
     const cat = state.categories.find((c) => c.id === catId);
-    if (!cat) return;
+    if (!cat) return false;
 
     let target = Math.max(0, Math.min(state.income, Math.round(requested)));
 
     if (target <= cat.amount) {
+        // Reduction is always allowed.
+        const wasCapped = target !== Math.max(0, Math.round(requested)); // capped by income ceiling?
         cat.amount = target;
-        return;
+        return wasCapped;
     }
 
     const currentTotal = totalAllocated();
@@ -242,28 +246,12 @@ function setCategoryAmount(catId, requested) {
 
     if (increase <= remainder) {
         cat.amount = target;
-        return;
+        return target !== Math.max(0, Math.round(requested));
     }
 
-    const needed = increase - remainder;
-    const others = state.categories.filter((c) => c.id !== catId);
-    const unlockedOthers = others.filter(c => !c.locked);
-    const unlockedOthersTotal = unlockedOthers.reduce((s, c) => s + c.amount, 0);
-
-    if (unlockedOthersTotal <= 0) {
-        // No unlocked categories can give up budget — take only what's free
-        cat.amount = cat.amount + remainder;
-        return;
-    }
-
-    if (needed >= unlockedOthersTotal) {
-        // Take everything unlocked others have
-        unlockedOthers.forEach(c => { c.amount = 0; });
-        cat.amount = cat.amount + remainder + unlockedOthersTotal;
-    } else {
-        shrinkProportionally(unlockedOthers, unlockedOthersTotal - needed);
-        cat.amount = target;
-    }
+    // Hard cap: kasvata vain Jakamattomaan asti, älä kutista muita.
+    cat.amount = cat.amount + remainder;
+    return true;
 }
 
 /** If categories overflow income (e.g. after an income decrease), scale them down. */
@@ -699,8 +687,16 @@ $categoryList.addEventListener('input', (e) => {
         saveState();
     } else if (action === 'slider' || action === 'amount') {
         const requested = Math.max(0, Number(t.value) || 0);
-        setCategoryAmount(cat.id, requested);
+        const wasCapped = setCategoryAmount(cat.id, requested);
         if (cat.amount !== requested) t.value = cat.amount;
+        // Visuaalinen palaute kun budjetti on täynnä eikä kasvu mahtunut.
+        if (wasCapped && requested > cat.amount) {
+            li.classList.add('cat-capped');
+            setTimeout(() => li.classList.remove('cat-capped'), 700);
+            // Slider/input lukitsee max-arvoon, mutta kerro käyttäjälle. Käytetään
+            // olemassa olevaa save-status-mekanismia kevyenä toast-viestinä.
+            showSaveStatus('Budjetti on täynnä — vapauta tilaa toisesta kategoriasta');
+        }
         refreshBar();
         syncAllListRows();
         renderSummary();
@@ -751,17 +747,35 @@ $categoryList.addEventListener('click', (e) => {
     saveState();
 });
 
-document.getElementById('addCategory').addEventListener('click', () => {
+function addNewCategory(opts = {}) {
     const used = new Set(state.categories.map((c) => c.color));
     const color = PALETTE.find((c) => !used.has(c)) ?? PALETTE[state.categories.length % PALETTE.length];
-    state.categories.push({
+    const newCat = {
         id: `cat-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         name: 'Uusi kategoria',
         color,
         amount: 0,
-    });
+    };
+    state.categories.push(newCat);
     renderAll();
     saveState();
+    // Skrollaa uuteen kategoriaan jos pyydetty (kun käyttäjä painoi listan
+    // pohjassa olevaa nappia → uusi kategoria on alimpana eikä näy ruudulla).
+    if (opts.scrollTo) {
+        requestAnimationFrame(() => {
+            const list = document.getElementById('categoryList');
+            const last = list?.querySelector('li:last-child');
+            if (last) last.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+    }
+}
+
+document.getElementById('addCategory').addEventListener('click', () => {
+    addNewCategory();
+});
+
+document.getElementById('addCategoryBottom')?.addEventListener('click', () => {
+    addNewCategory({ scrollTo: true });
 });
 
 // ----------------------------------------------------------------------------
@@ -1073,11 +1087,20 @@ document.querySelectorAll('[data-close-modal]').forEach(btn => {
 document.getElementById('saveEntityBtn').addEventListener('click', (e) => {
     e.preventDefault();
 
-    const name = $entityName.value.trim();
+    const nameRaw = $entityName.value.trim();
     const type = $entityType.value;
-    if (!name || !type) {
-        alert('Täytä nimi ja tyyppi.');
+    if (!type) {
+        alert('Valitse tyyppi.');
         return;
+    }
+    // Nimi on optionaalin: jos käyttäjä jätti tyhjäksi, käytä tyypin oletusnimeä
+    // ("Laina", "Säästö", "Sijoitus") + juokseva numero jotta ne erottuvat.
+    let name = nameRaw;
+    if (!name) {
+        const typeLabel = type === 'loan' ? 'Laina' : type === 'savings' ? 'Säästö' : 'Sijoitus';
+        const existingSameType = state.financialEntities.filter(e => e.type === type && (!$entityFormId.value || e.id !== $entityFormId.value));
+        const num = existingSameType.length + 1;
+        name = num > 1 ? `${typeLabel} ${num}` : typeLabel;
     }
 
     const linkedCategoryId = $entityLinkedCategory.value || null;
@@ -1109,9 +1132,10 @@ document.getElementById('saveEntityBtn').addEventListener('click', (e) => {
         base.startDate = $loanStartDate.value || new Date().toISOString().slice(0, 10);
         base.redistributeOnDone = $loanRedistribute.checked;
         base.redistributeToId = $loanRedistribute.checked ? ($loanRedistributeTarget.value || null) : null;
+        // Jos käyttäjä rastii redirectin mutta ei valitse kohdetta, tallennetaan
+        // ilman redirectia hiljaisesti — älä pakota erillistä valintaa.
         if (base.redistributeOnDone && !base.redistributeToId) {
-            alert('Valitse kohde, johon lainan kuukausierä ohjataan maksun jälkeen.');
-            return;
+            base.redistributeOnDone = false;
         }
     } else if (type === 'savings') {
         base.balance = Math.max(0, Math.round(Number($savingsBalance.value) || 0));
@@ -1121,9 +1145,10 @@ document.getElementById('saveEntityBtn').addEventListener('click', (e) => {
             : Math.max(0, Math.round(Number($savingsTarget.value) || 0));
         base.redistributeOnDone = $savingsRedistribute.checked;
         base.redistributeToId = $savingsRedistribute.checked ? ($savingsRedistributeTarget.value || null) : null;
+        // Sama kuin lainassa: salli redirectin rastittaminen ilman kohteen
+        // valintaa — tallennetaan ilman redirectia.
         if (base.redistributeOnDone && !base.redistributeToId) {
-            alert('Valitse kohde, johon säästö ohjataan tavoitteen jälkeen.');
-            return;
+            base.redistributeOnDone = false;
         }
     } else if (type === 'investment') {
         base.currentValue = Math.max(0, Math.round(Number($investValue.value) || 0));
@@ -1994,9 +2019,19 @@ function renderCompareChart(scenarios, riskBands, loan, investments, signedShift
     const baseline = scenarios.baseline;
     const showGhost = activeKey !== 'baseline';
 
-    const W = 820;
-    const H = 400;
-    const margin = { top: 28, right: 24, bottom: 70, left: 86 };
+    // Mobile-tilassa käytetään pienempää viewBoxia + suurempaa fonttia jotta
+    // teksti pysyy luettavana kun chart skaalataan ~360px leveydeksi.
+    const isMobile = window.innerWidth < 640;
+    const W = isMobile ? 440 : 820;
+    const H = isMobile ? 360 : 400;
+    const margin = isMobile
+        ? { top: 24, right: 12, bottom: 84, left: 56 }
+        : { top: 28, right: 24, bottom: 70, left: 86 };
+    const fs = {
+        axis: isMobile ? 14 : 11,
+        legend: isMobile ? 14 : 12,
+        tip: isMobile ? 13 : 11,
+    };
     const cw = W - margin.left - margin.right;
     const ch = H - margin.top - margin.bottom;
 
@@ -2034,7 +2069,7 @@ function renderCompareChart(scenarios, riskBands, loan, investments, signedShift
         const v = yMin + ((yMax - yMin) * i) / yTicks;
         const y = yScale(v);
         pieces.push(`<line x1="${margin.left}" y1="${y}" x2="${W - margin.right}" y2="${y}" stroke="#f1f5f9" stroke-width="1"/>`);
-        pieces.push(`<text x="${margin.left - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="#64748b">${euro(Math.round(v))}</text>`);
+        pieces.push(`<text x="${margin.left - 8}" y="${y + 4}" text-anchor="end" font-size="${fs.axis}" fill="#64748b">${euro(Math.round(v))}</text>`);
     }
     if (yMin < 0 && yMax > 0) {
         const y0 = yScale(0);
@@ -2046,7 +2081,7 @@ function renderCompareChart(scenarios, riskBands, loan, investments, signedShift
     for (let yr = 0; yr <= horizonYears; yr += xStep) {
         const x = xScale(yr * 12);
         pieces.push(`<line x1="${x}" y1="${margin.top}" x2="${x}" y2="${H - margin.bottom}" stroke="#f1f5f9" stroke-width="1"/>`);
-        pieces.push(`<text x="${x}" y="${H - margin.bottom + 16}" text-anchor="middle" font-size="11" fill="#64748b">${yr} v</text>`);
+        pieces.push(`<text x="${x}" y="${H - margin.bottom + 16}" text-anchor="middle" font-size="${fs.axis}" fill="#64748b">${yr} v</text>`);
     }
 
     // Risk band on net worth of the active scenario
@@ -2078,7 +2113,7 @@ function renderCompareChart(scenarios, riskBands, loan, investments, signedShift
         const x = xScale(active.payoffMonth);
         const yrLabel = (active.payoffMonth / 12).toFixed(1) + ' v';
         pieces.push(`<line x1="${x}" y1="${margin.top}" x2="${x}" y2="${H - margin.bottom}" stroke="${COMPARE_LOAN_COLOR}" stroke-width="1.6" stroke-dasharray="5 4" opacity="0.85"/>`);
-        pieces.push(`<text x="${x + 6}" y="${margin.top + 14}" font-size="11" font-weight="600" fill="${COMPARE_LOAN_COLOR}">Laina maksettu · ${yrLabel}</text>`);
+        pieces.push(`<text x="${x + 6}" y="${margin.top + 14}" font-size="${fs.legend}" font-weight="600" fill="${COMPARE_LOAN_COLOR}">Laina maksettu · ${yrLabel}</text>`);
     }
 
     // Legend at bottom
@@ -2098,14 +2133,14 @@ function renderCompareChart(scenarios, riskBands, loan, investments, signedShift
         const dash = opts.dash ? `stroke-dasharray="${opts.dash}"` : '';
         const sw = opts.sw || 2.4;
         pieces.push(`<line x1="${lx}" y1="${ly}" x2="${lx + 22}" y2="${ly}" stroke="${color}" stroke-width="${sw}" ${dash}/>`);
-        pieces.push(`<text x="${lx + 26}" y="${ly + 4}" font-size="11" fill="#334155">${label}</text>`);
+        pieces.push(`<text x="${lx + 26}" y="${ly + 4}" font-size="${fs.legend}" fill="#334155">${label}</text>`);
         lx += w;
     };
     const addSwatch = (color, label) => {
         const w = 22 + 6 + label.length * 6.2 + 16;
         wrapIfNeeded(w);
         pieces.push(`<rect x="${lx}" y="${ly - 5}" width="22" height="10" rx="2" fill="${color}" fill-opacity="0.18" stroke="${color}" stroke-opacity="0.4"/>`);
-        pieces.push(`<text x="${lx + 26}" y="${ly + 4}" font-size="11" fill="#334155">${label}</text>`);
+        pieces.push(`<text x="${lx + 26}" y="${ly + 4}" font-size="${fs.legend}" fill="#334155">${label}</text>`);
         lx += w;
     };
 
@@ -2116,7 +2151,7 @@ function renderCompareChart(scenarios, riskBands, loan, investments, signedShift
     });
     if (investments.length > 4) {
         wrapIfNeeded(80);
-        pieces.push(`<text x="${lx}" y="${ly + 4}" font-size="11" fill="#94a3b8">+${investments.length - 4} muuta</text>`);
+        pieces.push(`<text x="${lx}" y="${ly + 4}" font-size="${fs.legend}" fill="#94a3b8">+${investments.length - 4} muuta</text>`);
         lx += 80;
     }
     if (showGhost) {
@@ -2302,7 +2337,10 @@ function applyShiftToBudget(direction) {
 
     enforceCap();
     compareState.shift = 0;
-    $compareAssessment.style.display = 'none';
+    // Jätä suositus näkyviin jos se oli auki ennen toteutusta — refresh-
+    // mekanismi (renderComparePage → refreshAssessmentIfOpen) ajaa sen uudelleen
+    // uudella baselinella. Tällöin käyttäjä näkee onko toteutus riittävä
+    // ('Tasapainoisin jako: nykyinen jako') vai onko vielä siirrettävää.
     saveState();
     renderAll();
     renderComparePage();
@@ -2541,17 +2579,28 @@ function assessBestStrategy(loan, investments, baseLoanMonthly, baseInvMonthlies
         });
         return { gainsAbs, gainsRel };
     };
-    const balancedSample = sampleHorizons(balancedShift);
+    // Sample current slider position (compareState.shift) — taulukko liikkuu sliderin
+    // mukana. Suosituksen omat luvut säilyvät erillisinä field:eissä jotta UI voi
+    // näyttää molemmat tarpeen mukaan.
+    const currentShift = Math.max(-maxLoanShift, Math.min(maxInvestShift, Number(compareState.shift) || 0));
+    const currentSample = sampleHorizons(currentShift);
     const horizonBreakdown = horizonsMonths.map((hm, i) => ({
         years: Math.round(hm / 12),
-        gainAbs: balancedSample.gainsAbs[i],
-        gainRel: balancedSample.gainsRel[i],
+        gainAbs: currentSample.gainsAbs[i],
+        gainRel: currentSample.gainsRel[i],
     }));
+    const currentWorstCaseRel = Math.min(...currentSample.gainsRel);
+    const currentAvgCaseRel = currentSample.gainsRel.reduce((s, g) => s + g, 0) / currentSample.gainsRel.length;
+
+    // Suosituksen omat luvut säilytetään erikseen (vaikka taulukossa näytetään
+    // nykyinen slider) jos UI haluaa kertoa "suosituksen pahimman aikajakson voitto".
+    const balancedSample = balancedShift === currentShift ? currentSample : sampleHorizons(balancedShift);
     const balancedWorstCaseRel = Math.min(...balancedSample.gainsRel);
     const balancedAvgCaseRel = balancedSample.gainsRel.reduce((s, g) => s + g, 0) / balancedSample.gainsRel.length;
 
     return {
         shift: balancedShift,
+        currentShift,
         rawBestShift: bestShift,
         spread: riskAdjustedSpread,
         expectedSpread,
@@ -2567,8 +2616,10 @@ function assessBestStrategy(loan, investments, baseLoanMonthly, baseInvMonthlies
         perEntity,
         hasRiskyInvest: investments.some(inv => inv.type === 'investment'),
         horizonBreakdown,
-        robustWorstCaseRel: balancedWorstCaseRel,
-        robustAvgCaseRel: balancedAvgCaseRel,
+        robustWorstCaseRel: currentWorstCaseRel,
+        robustAvgCaseRel: currentAvgCaseRel,
+        balancedWorstCaseRel,
+        balancedAvgCaseRel,
         rawWorstCaseRel: robust.worstCaseRel,
         rawAvgCaseRel: robust.avgCaseRel,
     };
@@ -2614,9 +2665,18 @@ function renderAssessment(best) {
             <td class="assessment-horizon-mark ${cls}">${winLabel}</td>
         </tr>`;
     }).join('');
+    // Taulukon otsikko reflektoi sliderin nykyistä asentoa (liikkuu sen mukana).
+    // Jos slider on nollassa, taulukko näyttää baseline = baseline (kaikki 0). Jos
+    // slider on suosituksessa, taulukko näyttää suosituksen voitot.
+    const cur = Number(best.currentShift) || 0;
+    const horizonTableSubtitle = cur === 0
+        ? 'liu’utin nollassa — voitto = 0 €'
+        : (cur > 0
+            ? `liu’utin: sijoituksiin +${euro(cur)}/kk`
+            : `liu’utin: lainaan +${euro(Math.abs(cur))}/kk`);
     const horizonTable = horizonRows
         ? `<div class="assessment-horizon-section">
-              <div class="assessment-horizon-title">Voitto vs. nykyinen jako eri aikajaksoissa (minimax-pisteytys):</div>
+              <div class="assessment-horizon-title">Voitto vs. nykyinen jako eri aikajaksoissa <span class="assessment-horizon-subtitle">(${horizonTableSubtitle})</span></div>
               <table class="assessment-horizon-table">
                   <thead><tr><th>Aika</th><th>%</th><th>€</th><th></th></tr></thead>
                   <tbody>${horizonRows}</tbody>
@@ -2957,6 +3017,24 @@ function refreshAssessmentIfOpen() {
 
 $compareAssessBtn.addEventListener('click', runAssessment);
 
+// Re-render Vertailu-sivu kun ikkunan koko muuttuu — chart käyttää eri viewBoxia
+// ja fonttikokoa < 640px-leveydellä, joten puhelimen kääntö tarvitsee uuden
+// renderöinnin. Debounce 150ms jotta resize-tapahtumat eivät jätä jälkeen.
+{
+    let resizeTimer = null;
+    let prevIsMobile = window.innerWidth < 640;
+    window.addEventListener('resize', () => {
+        const nowIsMobile = window.innerWidth < 640;
+        if (nowIsMobile === prevIsMobile) return; // ei breakpointin ylitystä
+        prevIsMobile = nowIsMobile;
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            // renderComparePage on idempotentti — sen voi kutsua tarvittaessa.
+            try { renderComparePage(); } catch (e) { /* ignore */ }
+        }, 150);
+    });
+}
+
 $compareAssessment.addEventListener('click', (e) => {
     if (e.target.matches('[data-action="dismiss-assess"]')) {
         $compareAssessment.style.display = 'none';
@@ -2965,7 +3043,8 @@ $compareAssessment.addEventListener('click', (e) => {
     const apply = e.target.closest('[data-action="apply-best"]');
     if (apply) {
         compareState.shift = Number(apply.dataset.signed) || 0;
-        $compareAssessment.style.display = 'none';
+        // Älä piilota suosituslaatikkoa — refresh ajaa sen uudelleen ja
+        // näyttää ✓ kun liu'utin on suosituspisteessä.
         renderComparePage();
     }
 });

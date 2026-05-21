@@ -69,6 +69,9 @@
                     <button type="button" id="addCategory">+ Lisää kategoria</button>
                 </div>
                 <ul id="categoryList"></ul>
+                <div class="categories-footer">
+                    <button type="button" id="addCategoryBottom" class="add-category-bottom">+ Lisää kategoria</button>
+                </div>
             </section>
 
             <section class="summary">
@@ -220,8 +223,8 @@
                     <input type="hidden" id="entityFormId" value="">
 
                     <label class="field-row">
-                        <span>Nimi</span>
-                        <input type="text" id="entityName" required placeholder="esim. Asuntolaina OP">
+                        <span>Nimi <span class="field-hint">(jätä tyhjäksi → tyypin oletusnimi)</span></span>
+                        <input type="text" id="entityName" placeholder="esim. Asuntolaina OP">
                     </label>
 
                     <label class="field-row">
