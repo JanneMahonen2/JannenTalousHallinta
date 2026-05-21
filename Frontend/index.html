@@ -143,18 +143,29 @@
                             <span>Suunnitelma</span>
                             <span id="compareShiftValue" class="compare-slider-value">Nykyinen jako</span>
                         </div>
-                        <div class="compare-shift-track">
-                            <input type="range" id="compareShiftSlider" min="-100" max="100" step="10" value="0">
+                        <div class="compare-shift-track compare-shift-dual">
+                            <div class="compare-shift-half compare-shift-loan">
+                                <input type="range" id="compareShiftSliderLoan" min="0" max="100" step="10" value="0" aria-label="Siirrä lainaan">
+                            </div>
+                            <div class="compare-shift-center" aria-hidden="true"></div>
+                            <div class="compare-shift-half compare-shift-invest">
+                                <input type="range" id="compareShiftSliderInvest" min="0" max="100" step="10" value="0" aria-label="Siirrä sijoituksiin">
+                            </div>
                         </div>
                         <div class="compare-slider-ends compare-slider-tri">
-                            <span class="end-left">← Lainaan</span>
-                            <span class="end-mid">Nykyinen</span>
-                            <span class="end-right">Sijoituksiin →</span>
+                            <span class="end-left">← Lainaan <span id="compareShiftMaxLoan" class="compare-shift-max"></span></span>
+                            <span class="end-mid">Nykyinen jako</span>
+                            <span class="end-right"><span id="compareShiftMaxInvest" class="compare-shift-max"></span> Sijoituksiin →</span>
                         </div>
+                        <label class="compare-release-toggle" id="compareReleaseToggleWrap" style="display:none">
+                            <input type="checkbox" id="compareReleaseToggle">
+                            <span>Salli suojattujen säästöjen (tavoitesäästöt) käyttö vertailussa</span>
+                            <span class="field-hint">— laajentaa sliderin aluetta esim. hätävarojen kustannuksella</span>
+                        </label>
                     </div>
                     <div class="compare-slider-row">
                         <div class="compare-slider-label">
-                            <span>Sijoituksen tuoton vaihtelu (riski) <span class="field-hint">— automaattinen: σ-painotettu × sijoitusosuus</span></span>
+                            <span>Sijoituksen tuoton vaihtelu (riski) <span class="field-hint">— baseline-σ × sijoitusosuus; alasuunta vahvistetaan invest-heavyssä (velkavipu) ja vaimennetaan loan-heavyssä</span></span>
                             <span id="compareRiskValue" class="compare-slider-value">±5 %</span>
                         </div>
                         <div class="compare-risk-track">

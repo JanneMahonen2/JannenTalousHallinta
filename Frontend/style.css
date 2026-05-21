@@ -911,6 +911,73 @@ header h1 {
 .assessment-breakdown li {
     margin: 2px 0;
 }
+.assessment-position-line {
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: #f1f5f9;
+    border-left: 3px solid #4f46e5;
+    border-radius: 4px;
+}
+.assessment-position {
+    font-size: 12px;
+    color: #1e293b;
+}
+.assessment-position.match {
+    color: #15803d;
+    font-weight: 500;
+}
+.assessment-horizon-section {
+    margin: 10px 0;
+    padding: 8px 10px;
+    background: #fafafa;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+}
+.assessment-horizon-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 6px;
+}
+.assessment-horizon-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+.assessment-horizon-table th {
+    text-align: left;
+    color: #94a3b8;
+    font-weight: 500;
+    padding: 2px 6px;
+    border-bottom: 1px solid #e2e8f0;
+}
+.assessment-horizon-table td {
+    padding: 3px 6px;
+    border-bottom: 1px solid #f1f5f9;
+}
+.assessment-horizon-table tr:last-child td {
+    border-bottom: none;
+}
+.assessment-horizon-gain.positive,
+.assessment-horizon-eur.positive,
+.assessment-horizon-mark.positive {
+    color: #15803d;
+}
+.assessment-horizon-gain.negative,
+.assessment-horizon-eur.negative,
+.assessment-horizon-mark.negative {
+    color: #b91c1c;
+}
+.assessment-horizon-mark {
+    text-align: center;
+    font-weight: 700;
+}
+.assessment-horizon-note {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #64748b;
+}
 .compare-assessment-actions {
     margin-top: 10px;
     display: flex;
@@ -1038,23 +1105,74 @@ header h1 {
 .compare-shift-track {
     position: relative;
 }
-.compare-shift-track::before {
-    content: '';
-    position: absolute;
-    left: calc(50% - 1px);
-    top: 50%;
-    width: 2px;
-    height: 14px;
-    background: #cbd5e1;
-    transform: translateY(-50%);
-    pointer-events: none;
-    border-radius: 2px;
-}
 .compare-shift-track input[type="range"] {
     position: relative;
     z-index: 1;
     width: 100%;
     accent-color: #4f46e5;
+}
+
+.compare-shift-dual {
+    display: flex;
+    align-items: center;
+    gap: 0;
+}
+.compare-shift-half {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+}
+.compare-shift-half input[type="range"] {
+    width: 100%;
+    display: block;
+    margin: 0;
+}
+.compare-shift-loan input[type="range"] {
+    transform: scaleX(-1);
+    accent-color: #d97706;
+}
+.compare-shift-invest input[type="range"] {
+    accent-color: #4f46e5;
+}
+.compare-shift-half input[type="range"]:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+.compare-shift-center {
+    width: 2px;
+    height: 16px;
+    background: #94a3b8;
+    border-radius: 2px;
+    flex-shrink: 0;
+    margin: 0 4px;
+}
+.compare-shift-max {
+    font-size: 10px;
+    color: #94a3b8;
+    font-weight: 400;
+}
+.compare-release-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #7c2d12;
+    cursor: pointer;
+    flex-wrap: wrap;
+}
+.compare-release-toggle input[type="checkbox"] {
+    margin: 0;
+    flex-shrink: 0;
+    accent-color: #d97706;
+}
+.compare-release-toggle .field-hint {
+    color: #9a3412;
+    font-size: 11px;
 }
 
 .compare-summary {
@@ -1270,6 +1388,18 @@ header h1 {
     border-radius: 12px;
     padding: 2px 10px;
     margin-right: 8px;
+}
+.impact-leverage-note {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #b45309;
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    cursor: help;
 }
 .impact-net-range strong {
     font-weight: 700;

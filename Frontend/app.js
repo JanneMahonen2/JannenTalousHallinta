@@ -318,6 +318,15 @@ function scheduledLoanMonthly(loan) {
     return principal * monthlyRate / (1 - Math.pow(1 + monthlyRate, -months));
 }
 
+function minimumCompareLoanMonthly(loan, currentMonthly) {
+    const principal = Math.max(0, loan?.principal || 0);
+    const monthlyRate = (loan?.interestRate || 0) / 100 / 12;
+    const interestFloor = principal * monthlyRate + 1;
+    const scheduled = scheduledLoanMonthly(loan);
+    const floor = scheduled <= currentMonthly ? scheduled : interestFloor;
+    return Math.max(0, Math.min(currentMonthly, floor));
+}
+
 /**
  * Investment/savings growth: compound growth with monthly contributions.
  * FV = P * (1+r)^n + C * ((1+r)^n - 1) / r
@@ -1440,9 +1449,13 @@ function renderFuturePage() {
 const $compareLoanSelect = document.getElementById('compareLoanSelect');
 const $compareLoanInfo = document.getElementById('compareLoanInfo');
 const $compareInvestList = document.getElementById('compareInvestList');
-const $compareShiftSlider = document.getElementById('compareShiftSlider');
+const $compareShiftSliderLoan = document.getElementById('compareShiftSliderLoan');
+const $compareShiftSliderInvest = document.getElementById('compareShiftSliderInvest');
 const $compareShiftValue = document.getElementById('compareShiftValue');
-const $compareShiftMaxLabel = document.getElementById('compareShiftMaxLabel');
+const $compareShiftMaxLoan = document.getElementById('compareShiftMaxLoan');
+const $compareShiftMaxInvest = document.getElementById('compareShiftMaxInvest');
+const $compareReleaseToggle = document.getElementById('compareReleaseToggle');
+const $compareReleaseToggleWrap = document.getElementById('compareReleaseToggleWrap');
 const $compareRiskSlider = document.getElementById('compareRiskSlider');
 const $compareRiskValue = document.getElementById('compareRiskValue');
 const $compareRiskLock = document.getElementById('compareRiskLock');
@@ -1478,6 +1491,7 @@ const compareState = {
     risk: 5,
     riskLocked: false,
     horizonYears: 20,
+    releaseProtected: false,
 };
 
 function getInvestRate(entity) {
@@ -1495,9 +1509,10 @@ function getInvestBalance(entity) {
  *
  * Honors the user-configured redistribution chain (entity.redistributeOnDone +
  * .redistributeToId) and savings.targetAmount caps:
- *   - Loan paid off → freed monthly flows to its configured target (if it is
- *     in the comparison selection). Same-month leftover (loan_monthly − final
- *     payment) is added directly to target's balance to preserve budget.
+ *   - Loan paid off → original loan monthly flows to its configured target.
+ *     Temporary extra money shifted from investments to the loan returns to the
+ *     original investment mix, so loan-focused scenarios don't silently turn
+ *     every selected investment into the loan's redirect target.
  *   - Savings reaches target → balance capped; overshoot + future monthly
  *     flow to the configured target.
  *   - If no redistribution is configured, the freed monthly cash stops in this
@@ -1509,7 +1524,7 @@ function getInvestBalance(entity) {
  * Investments get full risk adjustment; savings stay deterministic.
  * Returns { points: [{m, loan, inv, invs, interest}], payoffMonth, totalInterest }.
  */
-function simulateScenario(loan, investments, loanMonthly, investMonthlies, riskAdj, maxMonths) {
+function simulateScenario(loan, investments, loanMonthly, investMonthlies, riskAdj, maxMonths, options = {}) {
     // Build per-entity simulation state. Order is [loan, ...investments].
     const loanSim = {
         id: loan.id,
@@ -1520,11 +1535,13 @@ function simulateScenario(loan, investments, loanMonthly, investMonthlies, riskA
         rate: (loan.interestRate || 0) / 100 / 12,
         targetAmount: null,
         redistributeToId: loan.redistributeOnDone ? (loan.redistributeToId || null) : null,
+        redistributeMonthlyCap: Math.max(0, options.baseLoanMonthly ?? loanMonthly),
         doneAtMonth: null,
     };
     const investSims = investments.map((inv, i) => {
         const baseRate = getInvestRate(inv);
-        const adjRate = inv.type === 'investment' ? Math.max(0, baseRate + riskAdj) : baseRate;
+        const adj = typeof riskAdj === 'function' ? riskAdj(inv) : riskAdj;
+        const adjRate = inv.type === 'investment' ? Math.max(0, baseRate + adj) : baseRate;
         return {
             id: inv.id,
             isLoan: false,
@@ -1572,6 +1589,40 @@ function simulateScenario(loan, investments, loanMonthly, investMonthlies, riskA
         }
         const each = amount / active.length;
         return active.map(s => ({ sim: s, amount: each }));
+    };
+    const routeToProportional = (amount, excludeId) => {
+        proportionalSplit(amount, excludeId).forEach(({ sim, amount: a }) => {
+            sim.balance += a;
+        });
+    };
+    const addMonthlyProportional = (amount, excludeId) => {
+        proportionalSplit(amount, excludeId).forEach(({ sim, amount: a }) => {
+            sim.monthly += a;
+        });
+    };
+    const returnShiftToOriginalInvests = (amount, mode) => {
+        const weights = options.shiftReturnWeights || [];
+        const active = investSims
+            .map((sim, i) => ({ sim, weight: Math.max(0, weights[i] || 0) }))
+            .filter(x => x.weight > 0 && x.sim.doneAtMonth === null);
+        const totalWeight = active.reduce((sum, x) => sum + x.weight, 0);
+        if (totalWeight <= 0) {
+            if (mode === 'balance') routeToProportional(amount, null);
+            else addMonthlyProportional(amount, null);
+            return;
+        }
+        active.forEach(({ sim, weight }) => {
+            const part = amount * (weight / totalWeight);
+            if (mode === 'balance') sim.balance += part;
+            else sim.monthly += part;
+        });
+    };
+    const splitRedirectAmounts = (s, amount) => {
+        if (!s.isLoan) return { configured: amount, proportional: 0 };
+        const cap = Math.max(0, Math.min(s.redistributeMonthlyCap ?? s.monthly, s.monthly));
+        if (s.monthly <= 0 || cap >= s.monthly) return { configured: amount, proportional: 0 };
+        const configured = amount * (cap / s.monthly);
+        return { configured, proportional: amount - configured };
     };
 
     const sumInvs = () => investSims.reduce((s, x) => s + x.balance, 0);
@@ -1624,13 +1675,16 @@ function simulateScenario(loan, investments, loanMonthly, investMonthlies, riskA
         // 2) Route same-month freed cash to redistribute targets (or fallback)
         freedThisMonth.forEach(({ from, amount }) => {
             if (!from.redistributeToId) return;
+            const split = splitRedirectAmounts(from, amount);
             const target = resolveTarget(from, m);
-            if (target) {
-                target.balance += amount;
-            } else {
-                proportionalSplit(amount, from.id).forEach(({ sim, amount: a }) => {
-                    sim.balance += a;
-                });
+            if (target && split.configured > 0) {
+                target.balance += split.configured;
+            } else if (split.configured > 0) {
+                routeToProportional(split.configured, from.id);
+            }
+            if (split.proportional > 0) {
+                if (from.isLoan) returnShiftToOriginalInvests(split.proportional, 'balance');
+                else routeToProportional(split.proportional, from.id);
             }
         });
 
@@ -1643,13 +1697,16 @@ function simulateScenario(loan, investments, loanMonthly, investMonthlies, riskA
                 s.monthly = 0;
                 return;
             }
+            const split = splitRedirectAmounts(s, s.monthly);
             const target = resolveTarget(s, m);
-            if (target) {
-                target.monthly += s.monthly;
-            } else {
-                proportionalSplit(s.monthly, s.id).forEach(({ sim, amount }) => {
-                    sim.monthly += amount;
-                });
+            if (target && split.configured > 0) {
+                target.monthly += split.configured;
+            } else if (split.configured > 0) {
+                addMonthlyProportional(split.configured, s.id);
+            }
+            if (split.proportional > 0) {
+                if (s.isLoan) returnShiftToOriginalInvests(split.proportional, 'monthly');
+                else addMonthlyProportional(split.proportional, s.id);
             }
             s.monthly = 0;
         });
@@ -1718,12 +1775,12 @@ function compareValueDelta(value, baseline, opts = {}) {
     return `<span class="compare-delta ${cls}">${sign}${euro(Math.abs(diff))} vs. nyk.</span>`;
 }
 
-function renderCompareSummary(loan, investments, baseLoanMonthly, baseInvMonthlies, signedShift) {
+function renderCompareSummary(loan, investments, baseLoanMonthly, baseInvMonthlies, signedShift, releaseProtected = false) {
     // Show the MONTHLY allocations under the current slider position
     // Signed shift convention: positive = move to investments, negative = move to loan
     const totalInvMonthly = baseInvMonthlies.reduce((s, m) => s + m, 0);
     const magnitude = Math.abs(signedShift);
-    const monthlies = buildScenarioMonthlies(baseLoanMonthly, investments, baseInvMonthlies, magnitude);
+    const monthlies = buildScenarioMonthlies(baseLoanMonthly, investments, baseInvMonthlies, magnitude, releaseProtected);
     const active = signedShift > 0
         ? monthlies.investFocus
         : signedShift < 0
@@ -1762,6 +1819,8 @@ function renderImpactBox(scenarios, riskBands, signedShift, horizonYears, riskPc
     const baselinePoint = baseline.points[horizonMonths];
     const lowPoint = riskBands[activeKey].low.points[horizonMonths];
     const highPoint = riskBands[activeKey].high.points[horizonMonths];
+    const lowMult = riskBands[activeKey].lowMultiplier ?? 1;
+    const highMult = riskBands[activeKey].highMultiplier ?? 1;
 
     const activeNet = activePoint.inv - activePoint.loan;
     const baselineNet = baselinePoint.inv - baselinePoint.loan;
@@ -1867,7 +1926,19 @@ function renderImpactBox(scenarios, riskBands, signedShift, horizonYears, riskPc
                 <div class="impact-net-label">Arvioitu nettovarallisuus</div>
                 <div class="impact-net-value">${euro(Math.round(activeNet))}</div>
                 <div class="impact-net-range">
-                    <span class="impact-range-tag">Riskialue ±${riskPct} %</span>
+                    <span class="impact-range-tag">${(() => {
+                        const lowPct = (riskPct * lowMult).toFixed(1).replace(/\.0$/, '').replace('.', ',');
+                        const highPct = (riskPct * highMult).toFixed(1).replace(/\.0$/, '').replace('.', ',');
+                        if (Math.abs(lowMult - 1) < 0.01 && Math.abs(highMult - 1) < 0.01) {
+                            return `Riskialue ±${riskPct} %`;
+                        }
+                        const leverageNote = lowMult > 1.01
+                            ? ` <span class="impact-leverage-note" title="Velkavipu: pidät enemmän lainaa pidempään, joten alasuunta on vakavampi">⚠ vipu</span>`
+                            : lowMult < 0.99
+                                ? ` <span class="impact-leverage-note" title="Olet vähentänyt velkavipua">↓ vivutettu</span>`
+                                : '';
+                        return `Riskialue −${lowPct} % / +${highPct} %${leverageNote}`;
+                    })()}</span>
                     <strong>${euro(Math.round(lowNet))}</strong>
                     <span class="impact-range-sep">–</span>
                     <strong>${euro(Math.round(highNet))}</strong>
@@ -2138,7 +2209,7 @@ function renderCompareChart(scenarios, riskBands, loan, investments, signedShift
             : '';
         tooltip.innerHTML = `
             <div class="chart-tip-title">${monthLabel(m)}</div>
-            <div><span>Nettovarallisuus</span><strong>${euro(Math.round(net))}</strong></div>
+            <div><span>Nettovarallisuus (sijoitukset - lainasaldo)</span><strong>${euro(Math.round(net))}</strong></div>
             <div><span>Sijoitukset yhteensä</span><strong>${euro(Math.round(p.inv))}</strong></div>
             <div><span>Lainasaldo</span><strong>${euro(Math.round(p.loan))}</strong></div>
             ${entityRows}
@@ -2242,18 +2313,29 @@ function isProtectedSavingsTarget(entity) {
     return entity?.type === 'savings' && entity.targetAmount && entity.targetAmount > 0;
 }
 
-function getFlexibleInvestMonthly(investments, baseInvMonthlies) {
+// releaseProtected = true → ohitetaan suojattujen säästötavoitteiden suojaus
+// vertailun aikana (käyttäjä haluaa testata aggressiivisemman skenaarion).
+function isProtectedInThisCompare(entity, releaseProtected) {
+    if (releaseProtected) return false;
+    return isProtectedSavingsTarget(entity);
+}
+
+function getFlexibleInvestMonthly(investments, baseInvMonthlies, releaseProtected = false) {
     return baseInvMonthlies.reduce((sum, monthly, i) => {
-        return isProtectedSavingsTarget(investments[i]) ? sum : sum + monthly;
+        return isProtectedInThisCompare(investments[i], releaseProtected) ? sum : sum + monthly;
     }, 0);
 }
 
-function buildScenarioMonthlies(baseLoanMonthly, investments, baseInvMonthlies, shift) {
-    const flexibleTotal = getFlexibleInvestMonthly(investments, baseInvMonthlies);
+function getFlexibleInvestWeights(investments, baseInvMonthlies, releaseProtected = false) {
+    return baseInvMonthlies.map((monthly, i) => isProtectedInThisCompare(investments[i], releaseProtected) ? 0 : monthly);
+}
+
+function buildScenarioMonthlies(baseLoanMonthly, investments, baseInvMonthlies, shift, releaseProtected = false) {
+    const flexibleTotal = getFlexibleInvestMonthly(investments, baseInvMonthlies, releaseProtected);
     const splitShift = (amount) => {
         if (flexibleTotal <= 0) return baseInvMonthlies.slice();
         return baseInvMonthlies.map((m, i) => {
-            if (isProtectedSavingsTarget(investments[i])) return m;
+            if (isProtectedInThisCompare(investments[i], releaseProtected)) return m;
             return Math.max(0, m + amount * (m / flexibleTotal));
         });
     };
@@ -2264,33 +2346,55 @@ function buildScenarioMonthlies(baseLoanMonthly, investments, baseInvMonthlies, 
     };
 }
 
-function runCompareSimulations(loan, investments, baseLoanMonthly, baseInvMonthlies, shift, risk, maxMonths) {
-    const monthlies = buildScenarioMonthlies(baseLoanMonthly, investments, baseInvMonthlies, shift);
+function runCompareSimulations(loan, investments, baseLoanMonthly, baseInvMonthlies, shift, risk, maxMonths, releaseProtected = false) {
+    const monthlies = buildScenarioMonthlies(baseLoanMonthly, investments, baseInvMonthlies, shift, releaseProtected);
+    const simOptions = {
+        baseLoanMonthly,
+        shiftReturnWeights: getFlexibleInvestWeights(investments, baseInvMonthlies, releaseProtected),
+    };
+
+    // Velkavipu-epäsymmetria: skenaariossa jossa pidetään suurempi osuus
+    // sijoituksissa (invest-heavy → enemmän lainaa pidempään) sijoitusten
+    // alasuunta on vipuvaikutuksesta vakavampi — joudut maksamaan lainan
+    // korkokuluja vaikka sijoitukset tuottaisivat huonosti. Vastaavasti
+    // loan-heavy-skenaariossa olet vähentänyt velkavipua ja alasuunta on
+    // lievempi. Ylasuunta (high band) pysyy baseline-riskinä koska sen
+    // €-määrällinen kasvu skenaarion suuremmista panoksista tulee jo
+    // simuloinnista itsestään.
+    const baseTotalMonthly = monthlies.baseline.loan + monthlies.baseline.invs.reduce((s, v) => s + v, 0);
+    const baseInvExposure = baseTotalMonthly > 0
+        ? monthlies.baseline.invs.reduce((s, v) => s + v, 0) / baseTotalMonthly
+        : 0;
+    const scenarioInvExposure = (k) => {
+        const total = monthlies[k].loan + monthlies[k].invs.reduce((s, v) => s + v, 0);
+        const inv = monthlies[k].invs.reduce((s, v) => s + v, 0);
+        return total > 0 ? inv / total : baseInvExposure;
+    };
+
     const scenarios = {};
     const riskBands = {};
     ['loanFocus', 'baseline', 'investFocus'].forEach(k => {
         const m = monthlies[k];
-        scenarios[k] = simulateScenario(loan, investments, m.loan, m.invs, 0, maxMonths);
+        scenarios[k] = simulateScenario(loan, investments, m.loan, m.invs, 0, maxMonths, simOptions);
+
+        // Kerroin: vaimennettu 0.7×, capped [0.5, 1.5]. Esim. baseline-exposure
+        // 0.69, scenario 0.91 → exposureShift = +0.31 → lowMultiplier = 1.22.
+        const exposureShift = baseInvExposure > 0
+            ? (scenarioInvExposure(k) - baseInvExposure) / baseInvExposure
+            : 0;
+        const lowMultiplier = Math.max(0.5, Math.min(1.5, 1 + exposureShift * 0.7));
+
         riskBands[k] = {
-            low: simulateScenario(loan, investments, m.loan, m.invs, -risk, maxMonths),
-            high: simulateScenario(loan, investments, m.loan, m.invs, +risk, maxMonths),
+            low: simulateScenario(loan, investments, m.loan, m.invs, -risk * lowMultiplier, maxMonths, simOptions),
+            high: simulateScenario(loan, investments, m.loan, m.invs, +risk, maxMonths, simOptions),
+            lowMultiplier,
+            highMultiplier: 1,
         };
     });
     return { scenarios, riskBands };
 }
 
-/**
- * Time-independent strategy recommendation based on risk-adjusted return spread.
- *
- * Classical "pay down debt vs. invest" answer: compare the GUARANTEED return
- * of each option. Loan prepayment guarantees `loanRate`. Savings guarantee
- * their interest rate. Investments only have an EXPECTED return — to compare
- * fairly, subtract a risk premium.
- *
- * Time horizon doesn't change which return is higher — it only amplifies the
- * gap. So the recommendation is the same whether you look at 1 v or 30 v.
- */
-function assessBestStrategy(loan, investments, baseInvMonthlies, maxLoanShift, maxInvestShift) {
+function assessBestStrategy(loan, investments, baseLoanMonthly, baseInvMonthlies, maxLoanShift, maxInvestShift, horizonMonths, releaseProtected = false) {
     if ((maxLoanShift <= 0 && maxInvestShift <= 0) || investments.length === 0) return null;
     const totalInv = baseInvMonthlies.reduce((s, m) => s + m, 0);
     if (totalInv <= 0) return null;
@@ -2314,24 +2418,147 @@ function assessBestStrategy(loan, investments, baseInvMonthlies, maxLoanShift, m
         perEntity.push({ name: inv.name, type: inv.type, rate, premium, sigma, adjRate, weight });
     });
 
-    // spread > 0  → invest beats loan; spread < 0 → loan beats invest
-    const spread = weightedAdjReturn - loanRate;
+    // Multi-horizon scoring: simuloidaan jokainen kandidaatti 30v asti ja
+    // sampleerataan netto useammassa horisontissa. Minimax-pohjainen valinta
+    // suosii shiftia joka voittaa baselinen pahimmankin aikajakson yli — eli
+    // suositus on robusti riippumatta siitä onko käyttäjän aikajakso 5 vai 30 v.
+    //
+    // TÄRKEÄ ERO: minimax-pisteytys käyttää RISKIKORJATTUA sijoituskorkoa
+    // (rate − premium), jotta hyvin riskillinen sijoitus (esim. krypto, σ=60 %
+    // → preemio 10,8 % → adj-rate 0...alle 0) ei näytä houkuttelevalta vain
+    // nominaalisen 10 % tuoton perusteella. Tällä korjauksella kryptolla
+    // suositus painottuu oikein lainan suuntaan, kun riskikorjattu tuotto on
+    // lainakorkoa pienempi. Horisonttitaulukko ja muu UI näyttää silti
+    // nominaaliset luvut jotta vastaa Vertailu-näkymän muita arvoja.
+    const horizonsMonths = [60, 120, 180, 240, 300, 360];
+    const maxSimMonths = Math.max(...horizonsMonths, horizonMonths);
+    const simOptions = {
+        baseLoanMonthly,
+        shiftReturnWeights: getFlexibleInvestWeights(investments, baseInvMonthlies, releaseProtected),
+    };
+    const investRiskAdjFn = (inv) => -getEntityRiskPremium(inv);
 
-    // Magnitude scaling: dead zone near 0, full maxShift at ±2 pp gap.
-    const DEAD_ZONE = 0.3;
-    const FULL_AT = 2.0;
-    const absSpread = Math.abs(spread);
-    let magnitude = 0;
-    if (absSpread > DEAD_ZONE) {
-        const norm = Math.min(1, (absSpread - DEAD_ZONE) / (FULL_AT - DEAD_ZONE));
-        const directionMax = spread > 0 ? maxInvestShift : maxLoanShift;
-        magnitude = Math.round(directionMax * norm);
+    const simulateShiftAt = (signedShift, riskAdj) => {
+        const monthlies = buildScenarioMonthlies(baseLoanMonthly, investments, baseInvMonthlies, Math.abs(signedShift), releaseProtected);
+        const m = signedShift > 0
+            ? monthlies.investFocus
+            : signedShift < 0
+                ? monthlies.loanFocus
+                : monthlies.baseline;
+        return simulateScenario(loan, investments, m.loan, m.invs, riskAdj, maxSimMonths, simOptions);
+    };
+    const simulateShift = (signedShift) => simulateShiftAt(signedShift, 0);
+    const simulateShiftAdj = (signedShift) => simulateShiftAt(signedShift, investRiskAdjFn);
+
+    // Sample baseline (nominal — for display / current-horizon gain) and
+    // adj-baseline (for minimax scoring).
+    const baselineSim = simulateShift(0);
+    const baselineNetAt = (hm) => baselineSim.points[hm].inv - baselineSim.points[hm].loan;
+    const baselineNet = baselineNetAt(horizonMonths);
+
+    const baselineSimAdj = simulateShiftAdj(0);
+    const baselineNetAtAdj = (hm) => baselineSimAdj.points[hm].inv - baselineSimAdj.points[hm].loan;
+
+    // Candidate grid across slider range.
+    const span = maxLoanShift + maxInvestShift;
+    const step = Math.max(1, Math.ceil(span / 60));
+    const candidates = new Set([0, -maxLoanShift, maxInvestShift]);
+    for (let shift = -maxLoanShift; shift <= maxInvestShift; shift += step) {
+        candidates.add(Math.round(shift));
     }
-    const shift = spread > 0 ? magnitude : -magnitude;
+
+    // For each candidate: ADJ-rate sim → relative gain vs adj-baseline at each
+    // horizon. Score = minimum gain across horizons (minimax — pessimistinen).
+    // Tie-breaker: keskimääräinen voitto. Adj-sim valitsee oikean suunnan
+    // myös kun nominaali tuotto pettää σ-haircutin jälkeen.
+    const candidateScores = [];
+    candidates.forEach(shift => {
+        const clamped = Math.max(-maxLoanShift, Math.min(maxInvestShift, shift));
+        const sim = simulateShiftAdj(clamped);
+        const gainsAbs = horizonsMonths.map(hm => {
+            const net = sim.points[hm].inv - sim.points[hm].loan;
+            return net - baselineNetAtAdj(hm);
+        });
+        const gainsRel = horizonsMonths.map((hm, i) => {
+            const base = Math.abs(baselineNetAtAdj(hm));
+            return base > 1 ? gainsAbs[i] / base : 0;
+        });
+        const worstCaseRel = Math.min(...gainsRel);
+        const avgCaseRel = gainsRel.reduce((s, g) => s + g, 0) / gainsRel.length;
+        candidateScores.push({ shift: clamped, gainsAbs, gainsRel, worstCaseRel, avgCaseRel });
+    });
+
+    // Robust pick (minimax): paras pahimmassa aikajaksossa. Tie-break keskiarvo.
+    candidateScores.sort((a, b) => (b.worstCaseRel - a.worstCaseRel) || (b.avgCaseRel - a.avgCaseRel));
+    const robust = candidateScores[0];
+    const bestShift = robust.shift;
+    // bestNet käyttää NOMINAL-simulaatiota (näytön johdonmukaisuutta varten).
+    const bestNet = bestShift === 0
+        ? baselineNet
+        : (() => {
+            const sim = simulateShift(bestShift);
+            return sim.points[horizonMonths].inv - sim.points[horizonMonths].loan;
+        })();
+
+    const expectedSpread = weightedRawReturn - loanRate;
+    const riskAdjustedSpread = weightedAdjReturn - loanRate;
+
+    // Balanced "early-career, stable income" model:
+    // - Use robust (minimax) shift as direction, with same dampening as before.
+    // - Dampening + risk-adjusted spread brake keep recommendation conservative.
+    //   Krypto-tyypillinen sigma 60 % → preemio 10,8 % → riskAdjustedSpread negatiivinen
+    //   → riskBrake painaa balancedShift huomattavasti alemmas vaikka raw best olisi sama.
+    const horizonYears = horizonMonths / 12;
+    const directionMax = bestShift > 0 ? maxInvestShift : bestShift < 0 ? maxLoanShift : 0;
+    const directionCap = bestShift > 0
+        ? (horizonYears >= 10 ? 0.45 : 0.30)
+        : (loanRate <= 4 ? 0.35 : 0.55);
+    const gainConviction = directionMax > 0
+        ? Math.min(1, Math.abs(bestNet - baselineNet) / Math.max(1, directionMax * horizonYears * 1.2))
+        : 0;
+    const spreadConviction = Math.min(1, Math.abs(expectedSpread) / 2);
+    const riskBrake = bestShift > 0 && riskAdjustedSpread < 0
+        ? Math.max(0.25, 1 + riskAdjustedSpread / 6)
+        : 1;
+    const conviction = Math.max(0.15, (gainConviction * 0.7 + spreadConviction * 0.3) * riskBrake);
+    let balancedShift = Math.round(Math.sign(bestShift) * directionMax * directionCap * conviction);
+    if (Math.abs(bestNet - baselineNet) < 5 || Math.abs(balancedShift) < 1) balancedShift = 0;
+
+    // Horisontti-taulukko: lasketaan AINA balancedShift:lle (= se mitä käyttäjälle
+    // suositellaan). Aiemmin näytettiin raw bestShift:n voitot, mutta krypto vs
+    // indeksi -tapauksessa raw best on sama (561 €/kk koska simulaattori käyttää
+    // rate-arvoa eikä σ:aa), joten taulukko ei muuttunut σ:n mukaan vaikka
+    // balancedShift muuttui 252 → 80 €/kk. Nyt taulukko vastaa suositusta.
+    const sampleHorizons = (signedShift) => {
+        const sim = signedShift === 0 ? baselineSim : simulateShift(signedShift);
+        const gainsAbs = horizonsMonths.map(hm => {
+            const net = sim.points[hm].inv - sim.points[hm].loan;
+            return net - baselineNetAt(hm);
+        });
+        const gainsRel = horizonsMonths.map((hm, i) => {
+            const base = Math.abs(baselineNetAt(hm));
+            return base > 1 ? gainsAbs[i] / base : 0;
+        });
+        return { gainsAbs, gainsRel };
+    };
+    const balancedSample = sampleHorizons(balancedShift);
+    const horizonBreakdown = horizonsMonths.map((hm, i) => ({
+        years: Math.round(hm / 12),
+        gainAbs: balancedSample.gainsAbs[i],
+        gainRel: balancedSample.gainsRel[i],
+    }));
+    const balancedWorstCaseRel = Math.min(...balancedSample.gainsRel);
+    const balancedAvgCaseRel = balancedSample.gainsRel.reduce((s, g) => s + g, 0) / balancedSample.gainsRel.length;
 
     return {
-        shift,
-        spread,
+        shift: balancedShift,
+        rawBestShift: bestShift,
+        spread: riskAdjustedSpread,
+        expectedSpread,
+        riskAdjustedSpread,
+        gain: bestNet - baselineNet,
+        bestNet,
+        baselineNet,
         loanRate,
         adjInvestReturn: weightedAdjReturn,
         rawInvestReturn: weightedRawReturn,
@@ -2339,6 +2566,11 @@ function assessBestStrategy(loan, investments, baseInvMonthlies, maxLoanShift, m
         weightedSigma,
         perEntity,
         hasRiskyInvest: investments.some(inv => inv.type === 'investment'),
+        horizonBreakdown,
+        robustWorstCaseRel: balancedWorstCaseRel,
+        robustAvgCaseRel: balancedAvgCaseRel,
+        rawWorstCaseRel: robust.worstCaseRel,
+        rawAvgCaseRel: robust.avgCaseRel,
     };
 }
 
@@ -2352,7 +2584,7 @@ function renderAssessment(best) {
     const fmt = (n) => n.toFixed(2).replace('.', ',');
     const fmtSigned = (n) => (n >= 0 ? '+' : '−') + fmt(Math.abs(n));
 
-    const title = '💡 Suositus (beta) — riskikorjattu, aikariippumaton';
+    const title = '💡 Suositus (beta) — minimax (robusti kaikissa horisonteissa)';
 
     // Per-entity breakdown so user sees WHERE the premium comes from
     const perEntityRows = best.perEntity.map(p => {
@@ -2362,22 +2594,71 @@ function renderAssessment(best) {
         return `<li><strong>${escapeAttr(p.name)}</strong>: ${fmt(p.rate)} % − preemio ${fmt(p.premium)} % (σ ~${fmt(p.sigma)} %) = <strong>${fmt(p.adjRate)} %</strong></li>`;
     }).join('');
 
-    const riskNote = `Painotettu riskikorjattu tuotto <strong>${fmt(best.adjInvestReturn)} %</strong> (raaka ${fmt(best.rawInvestReturn)} %, keskim. preemio ${fmt(best.weightedPremium)} %, σ ${fmt(best.weightedSigma)} %).`;
+    const riskNote = `Painotettu tuotto <strong>${fmt(best.rawInvestReturn)} %</strong>, riskikorjattu <strong>${fmt(best.adjInvestReturn)} %</strong> (preemio ${fmt(best.weightedPremium)} %, σ ${fmt(best.weightedSigma)} %).`;
 
+    // Horisontti-erittely: näytä käyttäjälle kuinka paljon valittu shift voittaa
+    // baselinen kullakin aikajaksolla. Tämä auttaa ymmärtämään että suositus on
+    // robusti — ei riipu sattumalta käyttäjän valitsemasta horisontista.
+    const fmtPctSigned = (rel) => {
+        const pct = rel * 100;
+        const sign = pct >= 0 ? '+' : '−';
+        return `${sign}${Math.abs(pct).toFixed(1).replace('.', ',')} %`;
+    };
+    const horizonRows = (best.horizonBreakdown || []).map(h => {
+        const cls = h.gainRel >= 0 ? 'positive' : 'negative';
+        const winLabel = h.gainRel >= 0 ? '✓' : '✗';
+        return `<tr>
+            <td>${h.years} v</td>
+            <td class="assessment-horizon-gain ${cls}">${fmtPctSigned(h.gainRel)}</td>
+            <td class="assessment-horizon-eur ${cls}">${h.gainAbs >= 0 ? '+' : '−'}${euro(Math.round(Math.abs(h.gainAbs)))}</td>
+            <td class="assessment-horizon-mark ${cls}">${winLabel}</td>
+        </tr>`;
+    }).join('');
+    const horizonTable = horizonRows
+        ? `<div class="assessment-horizon-section">
+              <div class="assessment-horizon-title">Voitto vs. nykyinen jako eri aikajaksoissa (minimax-pisteytys):</div>
+              <table class="assessment-horizon-table">
+                  <thead><tr><th>Aika</th><th>%</th><th>€</th><th></th></tr></thead>
+                  <tbody>${horizonRows}</tbody>
+              </table>
+              <div class="assessment-horizon-note">Pahimman aikajakson suht. voitto: <strong>${fmtPctSigned(best.robustWorstCaseRel)}</strong> · keskiarvo: <strong>${fmtPctSigned(best.robustAvgCaseRel)}</strong></div>
+          </div>`
+        : '';
+
+    const recommendedShift = best.shift; // signed: + = sijoituksiin, − = lainaan
+    const recommendationIsNeutral = shiftAbs < 1 || Math.abs(best.gain) < 1;
     let recommendation;
-    if (Math.abs(best.spread) < 0.3) {
-        recommendation = `Ero lainan korkoon (<strong>${fmt(best.loanRate)} %</strong>) on alle 0,3 % → <strong>nykyinen jako on jo lähellä optimaalista</strong>.`;
-    } else if (shiftAbs < 1) {
-        recommendation = `Lainan korko <strong>${fmt(best.loanRate)} %</strong>, erotus <strong>${fmtSigned(best.spread)} %</strong>. Ero on pieni → nykyinen jako kelpaa.`;
+    if (recommendationIsNeutral) {
+        recommendation = `Tasapainoisin jako tällä aikajaksolla on <strong>nykyinen jako</strong> (siirto 0 €/kk).`;
     } else {
-        recommendation = `Lainan korko <strong>${fmt(best.loanRate)} %</strong>, erotus <strong>${fmtSigned(best.spread)} %</strong> → siirrä noin <strong>${euro(shiftAbs)}/kk ${direction}</strong>.`;
+        recommendation = `Tasapainoisin jako: <strong>${euro(shiftAbs)}/kk ${direction}</strong>. (Odotusarvon ääriratkaisu olisi ${best.rawBestShift > 0 ? 'sijoituksiin' : 'lainaan'} ${euro(Math.abs(best.rawBestShift))}/kk, mutta vaimennettu riskin, likviditeetin ja hajautuksen takia.)`;
+    }
+
+    // Vertaa nykyiseen liukurin asentoon → kerro käyttäjälle paljonko ja mihin
+    // suuntaan tämän pitää liikkua päästäkseen suosituspisteeseen. Tämä päivittyy
+    // automaattisesti aina kun käyttäjä liu'uttaa (refreshAssessmentIfOpen).
+    const currentShift = Number(compareState.shift) || 0;
+    const distance = recommendedShift - currentShift;
+    const distanceAbs = Math.abs(distance);
+    const atRecommendation = distanceAbs < 1;
+    const fmtPos = (v) => v === 0
+        ? 'nykyinen jako'
+        : (v > 0 ? `sijoituksiin +${euro(v)}/kk` : `lainaan +${euro(Math.abs(v))}/kk`);
+    let positionLine;
+    if (atRecommendation) {
+        positionLine = `<span class="assessment-position match">✓ Liukurisi on suosituspisteessä.</span>`;
+    } else {
+        const moveDir = distance > 0 ? 'oikealle (sijoituksiin)' : 'vasemmalle (lainaan)';
+        positionLine = `<span class="assessment-position">Liukurisi: <strong>${fmtPos(currentShift)}</strong> → siirrä <strong>${euro(distanceAbs)}/kk ${moveDir}</strong> päästäksesi suositukseen.</span>`;
     }
 
     const body = `
-        <div class="assessment-line">${riskNote}</div>
+        <div class="assessment-line">${riskNote} Odotustuoton erotus lainakorkoon <strong>${fmtSigned(best.expectedSpread)} %</strong>, riskikorjattu erotus <strong>${fmtSigned(best.riskAdjustedSpread)} %</strong>.</div>
         <ul class="assessment-breakdown">${perEntityRows}</ul>
         <div class="assessment-line">${recommendation}</div>
-        <div class="assessment-footnote">Aikajakso ei muuta suositusta — se vain vahvistaa eroa. Preemio = σ × 0,18 (Sharpe-pohjainen). Voit muuttaa sijoituksen tyyppiä sen muokkausnäkymästä.</div>
+        ${horizonTable}
+        <div class="assessment-line assessment-position-line">${positionLine}</div>
+        <div class="assessment-footnote">Suunta valitaan <strong>riskikorjatulla</strong> minimax-pisteytyksellä: jokaisen sijoituksen tuotosta vähennetään σ-pohjainen preemio (esim. krypto 10 % − 10,8 % ≈ 0 %), ja shift joka voittaa pahimmankin aikajakson (5–30 v) yli valitaan. Näin korkeariskinen sijoitus ei vedä suositusta vain nominaaliluvun perusteella. Horisonttitaulukko näyttää nominaaliset projektiot (vastaa Vertailu-näkymää). Tämän jälkeen tulos vaimennetaan riskin, likviditeetin ja hajautuksen takia. Tämä ei ole henkilökohtaista sijoitusneuvontaa.</div>
     `;
 
     $compareAssessment.style.display = '';
@@ -2385,9 +2666,9 @@ function renderAssessment(best) {
         <button type="button" class="compare-assessment-dismiss" data-action="dismiss-assess" aria-label="Sulje">×</button>
         <div class="compare-assessment-title">${title}</div>
         <div class="compare-assessment-body">${body}</div>
-        ${shiftAbs >= 1 ? `
+        ${!atRecommendation ? `
             <div class="compare-assessment-actions">
-                <button type="button" data-action="apply-best" data-signed="${best.shift}">Aseta liukuri tähän arvoon</button>
+                <button type="button" data-action="apply-best" data-signed="${recommendedShift}">Siirrä liukuri suosituspisteeseen (${fmtPos(recommendedShift)})</button>
             </div>
         ` : ''}
     `;
@@ -2439,20 +2720,48 @@ function renderComparePage() {
     $compareEmpty.style.display = 'none';
     $compareBody.style.display = '';
 
-    const flexibleInvMonthly = getFlexibleInvestMonthly(selectedInvests, baseInvMonthlies);
-    const minLoanMonthly = Math.min(baseLoanMonthly, scheduledLoanMonthly(loan));
+    // Jos käyttäjä on vapauttanut suojatut säästöt, ne ovat osa joustavaa
+    // budjettia — sallien aggressiivisemman vertailun (esim. hätävaroista lainaan).
+    const hasProtected = selectedInvests.some(isProtectedSavingsTarget);
+    const releaseProtected = compareState.releaseProtected && hasProtected;
+    const flexibleInvMonthly = getFlexibleInvestMonthly(selectedInvests, baseInvMonthlies, releaseProtected);
+    const minLoanMonthly = minimumCompareLoanMonthly(loan, baseLoanMonthly);
     const maxLoanShift = Math.floor(flexibleInvMonthly);
     const maxInvestShift = flexibleInvMonthly > 0
         ? Math.floor(Math.max(0, baseLoanMonthly - minLoanMonthly))
         : 0;
-    $compareShiftSlider.min = String(-maxLoanShift);
-    $compareShiftSlider.max = String(maxInvestShift);
     if (compareState.shift < -maxLoanShift) {
         compareState.shift = -maxLoanShift;
     } else if (compareState.shift > maxInvestShift) {
         compareState.shift = maxInvestShift;
     }
-    $compareShiftSlider.value = String(compareState.shift);
+    // Two-half slider: vasen = lainaan (0..maxLoanShift), oikea = sijoituksiin (0..maxInvestShift)
+    // Yhdistetty compareState.shift: negatiivinen = lainaan, positiivinen = sijoituksiin.
+    $compareShiftSliderLoan.min = '0';
+    $compareShiftSliderLoan.max = String(Math.max(0, maxLoanShift));
+    $compareShiftSliderLoan.disabled = maxLoanShift <= 0;
+    $compareShiftSliderLoan.value = String(compareState.shift < 0 ? Math.abs(compareState.shift) : 0);
+
+    $compareShiftSliderInvest.min = '0';
+    $compareShiftSliderInvest.max = String(Math.max(0, maxInvestShift));
+    $compareShiftSliderInvest.disabled = maxInvestShift <= 0;
+    $compareShiftSliderInvest.value = String(compareState.shift > 0 ? compareState.shift : 0);
+
+    if ($compareShiftMaxLoan) {
+        $compareShiftMaxLoan.textContent = maxLoanShift > 0 ? `(max +${euro(maxLoanShift)}/kk)` : '';
+    }
+    if ($compareShiftMaxInvest) {
+        $compareShiftMaxInvest.textContent = maxInvestShift > 0 ? `(max +${euro(maxInvestShift)}/kk)` : '';
+    }
+
+    // Toggle suojattujen säästöjen vapauttamiseen näytetään vain jos joukossa
+    // on yksikin suojattu kohde — muuten siitä ei ole hyötyä.
+    if ($compareReleaseToggleWrap) {
+        $compareReleaseToggleWrap.style.display = hasProtected ? '' : 'none';
+    }
+    if ($compareReleaseToggle) {
+        $compareReleaseToggle.checked = compareState.releaseProtected;
+    }
 
     if (compareState.shift > 0) {
         $compareShiftValue.textContent = `Sijoituksiin +${euro(compareState.shift)} /kk`;
@@ -2463,36 +2772,24 @@ function renderComparePage() {
     }
 
     // Auto-risk: σ-painotettu kaikkien valittujen sijoitusten kesken, skaalattuna
-    // niiden osuudella kokonaisbudjetista. Käyttää SCENARIO-allokaatiota (slider
-    // huomioidaan).
+    // niiden osuudella kokonaisbudjetista. Käyttää BASELINE-allokaatiota — sama
+    // tuottovaihteluprosentti sovelletaan kaikkiin skenaarioihin, jotta riski-
+    // alueet ovat vertailukelpoisia (loan-heavy ei näytä keinotekoisen turvalliselta
+    // pelkästään koska sijoitusosuus pienenee).
     //
     // Kaava: autoRisk = max(1, round((σ_w × exposure) / 2)) ; cap 20
     //   /2 antaa noin "1σ" rate-vaihtelun (σ=5 % korkorahastolle → ±2,5 %).
     //   Floor 1 kun sijoituksia on yhtään — koska mikään sijoitus ei ole täysin
     //   riskitön (esim. 200k€ korkorahasto ei voi näyttää ±0 % riskiä).
     //   Cap 20 vastaa sliderin max-arvoa, jotta krypto-tyyppiset pääsevät täysillä.
-    //
-    // Esim:
-    //   - Korkorahasto all-in (σ=5):           5/2 = 3 %
-    //   - Indeksirahasto all-in (σ=15):       15/2 = 8 %
-    //   - Yksittäinen osake all-in (σ=30):    30/2 = 15 %
-    //   - Krypto all-in (σ=60):              60/2 = 30 → capped 20 %
     if (!compareState.riskLocked) {
         const totalBudget = baseLoanMonthly + totalInvMonthly;
-        const signedShift = compareState.shift;
-        const monthlies = buildScenarioMonthlies(baseLoanMonthly, selectedInvests, baseInvMonthlies, Math.abs(signedShift));
-        const scenarioInvMonthlies = signedShift > 0
-            ? monthlies.investFocus.invs
-            : signedShift < 0
-                ? monthlies.loanFocus.invs
-                : monthlies.baseline.invs;
-        const totalScenarioInv = scenarioInvMonthlies.reduce((s, v) => s + v, 0);
-        const sigmaWeighted = totalScenarioInv > 0
-            ? selectedInvests.reduce((s, inv, i) => s + getEntitySigma(inv) * scenarioInvMonthlies[i], 0) / totalScenarioInv
+        const sigmaWeighted = totalInvMonthly > 0
+            ? selectedInvests.reduce((s, inv, i) => s + getEntitySigma(inv) * baseInvMonthlies[i], 0) / totalInvMonthly
             : 0;
-        const investExposure = totalBudget > 0 ? totalScenarioInv / totalBudget : 0;
+        const investExposure = totalBudget > 0 ? totalInvMonthly / totalBudget : 0;
         const raw = (sigmaWeighted * investExposure) / 2;
-        const autoRisk = totalScenarioInv > 0
+        const autoRisk = totalInvMonthly > 0
             ? Math.max(1, Math.round(raw))
             : 0;
         compareState.risk = Math.min(20, autoRisk);
@@ -2525,7 +2822,7 @@ function renderComparePage() {
     const magnitude = Math.abs(compareState.shift);
     const { scenarios, riskBands } = runCompareSimulations(
         loan, selectedInvests, baseLoanMonthly, baseInvMonthlies,
-        magnitude, compareState.risk, maxMonths
+        magnitude, compareState.risk, maxMonths, releaseProtected
     );
 
     // Chart title reflects which scenario is being drawn in the breakdown view
@@ -2538,10 +2835,11 @@ function renderComparePage() {
         $compareChartTitle.textContent = `Skenaario: ${titleSuffix} — koostumus ajan myötä`;
     }
 
-    renderCompareSummary(loan, selectedInvests, baseLoanMonthly, baseInvMonthlies, compareState.shift);
+    renderCompareSummary(loan, selectedInvests, baseLoanMonthly, baseInvMonthlies, compareState.shift, releaseProtected);
     renderImpactBox(scenarios, riskBands, compareState.shift, compareState.horizonYears, compareState.risk, selectedInvests);
     renderCompareChart(scenarios, riskBands, loan, selectedInvests, compareState.shift, compareState.horizonYears, compareState.risk);
     renderCompareCta(compareState.shift);
+    refreshAssessmentIfOpen();
 }
 
 // --- Event wiring ---
@@ -2549,7 +2847,6 @@ function renderComparePage() {
 $compareLoanSelect.addEventListener('change', () => {
     compareState.loanId = $compareLoanSelect.value || null;
     compareState.shift = 0;
-    $compareAssessment.style.display = 'none';
     renderComparePage();
 });
 
@@ -2562,14 +2859,30 @@ $compareInvestList.addEventListener('change', (e) => {
         compareState.investIds = compareState.investIds.filter(x => x !== id);
     }
     compareState.shift = 0;
-    $compareAssessment.style.display = 'none';
     renderComparePage();
 });
 
-$compareShiftSlider.addEventListener('input', () => {
-    compareState.shift = Math.round(Number($compareShiftSlider.value) || 0);
+$compareShiftSliderLoan.addEventListener('input', () => {
+    const v = Math.round(Number($compareShiftSliderLoan.value) || 0);
+    compareState.shift = -v;
     renderComparePage();
 });
+
+$compareShiftSliderInvest.addEventListener('input', () => {
+    const v = Math.round(Number($compareShiftSliderInvest.value) || 0);
+    compareState.shift = v;
+    renderComparePage();
+});
+
+if ($compareReleaseToggle) {
+    $compareReleaseToggle.addEventListener('change', () => {
+        compareState.releaseProtected = $compareReleaseToggle.checked;
+        // Pidetään slider sallitun alueen sisällä — uusi max voi olla pienempi
+        // (ei tässä) tai suurempi; clamping hoituu renderComparePage:ssa.
+        compareState.shift = 0;
+        renderComparePage();
+    });
+}
 
 $compareRiskSlider.addEventListener('input', () => {
     compareState.risk = Math.max(0, Math.round(Number($compareRiskSlider.value) || 0));
@@ -2601,23 +2914,45 @@ function runAssessment() {
     if (!loan || selectedInvests.length === 0) return;
     const baseLoanMonthly = getLinkedMonthlyAmount(loan);
     const baseInvMonthlies = selectedInvests.map(inv => getLinkedMonthlyAmount(inv));
-    const totalInvMonthly = baseInvMonthlies.reduce((s, m) => s + m, 0);
-    const flexibleInvMonthly = getFlexibleInvestMonthly(selectedInvests, baseInvMonthlies);
-    const minLoanMonthly = Math.min(baseLoanMonthly, scheduledLoanMonthly(loan));
+    const hasProtected = selectedInvests.some(isProtectedSavingsTarget);
+    const releaseProtected = compareState.releaseProtected && hasProtected;
+    const flexibleInvMonthly = getFlexibleInvestMonthly(selectedInvests, baseInvMonthlies, releaseProtected);
+    const minLoanMonthly = minimumCompareLoanMonthly(loan, baseLoanMonthly);
     const maxLoanShift = Math.floor(flexibleInvMonthly);
     const maxInvestShift = flexibleInvMonthly > 0
         ? Math.floor(Math.max(0, baseLoanMonthly - minLoanMonthly))
         : 0;
-    const best = assessBestStrategy(loan, selectedInvests, baseInvMonthlies, maxLoanShift, maxInvestShift);
+    const best = assessBestStrategy(
+        loan,
+        selectedInvests,
+        baseLoanMonthly,
+        baseInvMonthlies,
+        maxLoanShift,
+        maxInvestShift,
+        compareState.horizonYears * 12,
+        releaseProtected
+    );
     renderAssessment(best);
 }
 
-// Re-run only if the assessment box is currently visible (so editing an entity
-// keeps the recommendation in sync with the new volatilityClass / rate).
+// Re-run only if the assessment box is currently visible (so editing an entity,
+// muuttamasta horisonttia, vapauttamasta säästöjä tai liu'uttamasta sliderin
+// pitää suosituksen ajan tasalla — käyttäjä ei jää näkemään vanhentunutta
+// tekstiä). Jos vertailun edellytykset eivät enää täyty (esim. käyttäjä otti
+// kaikki sijoitukset pois), piilotetaan boxi siististi sen sijaan että
+// jätettäisiin vanha sisältö paikoilleen.
 function refreshAssessmentIfOpen() {
-    if ($compareAssessment && $compareAssessment.style.display !== 'none' && $compareAssessment.innerHTML.trim() !== '') {
-        runAssessment();
+    if (!$compareAssessment) return;
+    if ($compareAssessment.style.display === 'none' || $compareAssessment.innerHTML.trim() === '') return;
+    const loan = state.financialEntities.find(e => e.id === compareState.loanId);
+    const selectedInvests = compareState.investIds
+        .map(id => state.financialEntities.find(e => e.id === id))
+        .filter(Boolean);
+    if (!loan || selectedInvests.length === 0) {
+        $compareAssessment.style.display = 'none';
+        return;
     }
+    runAssessment();
 }
 
 $compareAssessBtn.addEventListener('click', runAssessment);
