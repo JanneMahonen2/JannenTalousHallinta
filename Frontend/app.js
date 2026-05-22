@@ -1874,6 +1874,10 @@ function renderImpactBox(scenarios, riskBands, signedShift, horizonYears, riskPc
             ? `Skenaario: Lainaan +${euro(shiftAbs)} /kk`
             : 'Nykyinen jako';
 
+    // Impact-laatikko on nyt sliderien YLLÄ, joten käyttäjä näkee netto/riski/
+    // korot suoraan ilman skrollausta puhelimellakin. Ei tarvita erillisiä
+    // mini-preview-rivejä sliderien viereen (poistettu duplikaationa).
+
     const payoffLabel = active.payoffMonth ? `${active.payoffMonth} kk` : '> 360 kk';
     const payoffDelta = (signedShift !== 0 && active.payoffMonth && baseline.payoffMonth)
         ? (() => {
