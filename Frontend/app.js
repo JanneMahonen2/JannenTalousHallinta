@@ -1921,7 +1921,7 @@ function renderImpactBox(scenarios, riskBands, signedShift, horizonYears, riskPc
                     ${signedDelta(netDelta)}
                 </div>
                 <div class="impact-row impact-row-note">
-                    <span class="impact-label">josta lainan korkoja ${horizonYears} v aikana</span>
+                    <span class="impact-label" title="Skenaariossa maksettujen korkojen ja nykyisen jaon korkojen erotus. Positiivinen (+) = maksetaan enemmän korkoja, negatiivinen (−) = säästetään korkoja.">Lainan korkokulujen muutos</span>
                     ${signedDelta(interestDelta, { invert: true })}
                 </div>
             </div>
@@ -1945,8 +1945,13 @@ function renderImpactBox(scenarios, riskBands, signedShift, horizonYears, riskPc
         return `<div class="impact-row"><span class="impact-label" style="color:${color}">${escapeAttr(inv.name)} <span class="entity-type-tag-sm">${typeLabel}</span></span><span class="impact-value">${euro(Math.round(val))}</span></div>`;
     });
     const totalInvVal = activePoint.inv;
+    // Lainan kumulatiivinen korkokulu horisontin lopussa — absoluuttinen luku
+    // (ei muutos). Auttaa käyttäjää näkemään paljonko lainasta kuluu korkoihin
+    // tämän skenaarion aikana.
+    const scenarioInterestTotal = Math.round(activePoint.interest || 0);
+    const interestRowHtml = `<div class="impact-row impact-interest-row"><span class="impact-label" title="Kumulatiiviset lainan korkomaksut tämän skenaarion aikana ${horizonYears} v aikana. Tämä on absoluuttinen summa (ei muutos vs nyk.).">Lainan korot (${horizonYears} v)</span><span class="impact-value impact-interest">−${euro(scenarioInterestTotal)}</span></div>`;
     const entitySummary = entityRows.length > 0
-        ? `<div class="impact-entity-breakdown">${entityRows.join('')}<div class="impact-row strong"><span class="impact-label">Sijoitukset yhteensä</span><span class="impact-value">${euro(Math.round(totalInvVal))}</span></div></div>`
+        ? `<div class="impact-entity-breakdown">${entityRows.join('')}<div class="impact-row strong"><span class="impact-label">Sijoitukset yhteensä</span><span class="impact-value">${euro(Math.round(totalInvVal))}</span></div>${interestRowHtml}</div>`
         : '';
 
     const directionCls = signedShift > 0 ? 'invest' : signedShift < 0 ? 'loan' : 'neutral';

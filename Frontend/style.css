@@ -960,6 +960,9 @@ header h1 {
 .assessment-horizon-section {
     margin: 10px 0;
     padding: 8px 10px;
+    /* Pieni näyttö: salli horisontaalinen skrollaus jotta taulukko mahtuu */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
     background: #fafafa;
     border: 1px solid #e2e8f0;
     border-radius: 6px;
@@ -1422,6 +1425,19 @@ header h1 {
     padding-top: 8px;
     font-size: 13px;
 }
+.impact-entity-breakdown .impact-interest-row {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed #e2e8f0;
+    font-size: 12px;
+}
+.impact-entity-breakdown .impact-interest-row .impact-label {
+    color: #b45309;
+}
+.impact-entity-breakdown .impact-value.impact-interest {
+    color: #b45309;
+    font-weight: 600;
+}
 
 .entity-type-tag-sm {
     display: inline-block;
@@ -1676,8 +1692,34 @@ header h1 {
         padding: 12px;
         font-size: 14px;
     }
+    .assessment-horizon-section {
+        padding: 8px 6px;
+    }
     .assessment-horizon-table {
-        font-size: 12px;
+        font-size: 11px;
+    }
+    .assessment-horizon-table th,
+    .assessment-horizon-table td {
+        padding: 3px 4px;
+        white-space: nowrap;
+    }
+    .assessment-horizon-table .assessment-horizon-net {
+        font-size: 11px;
+    }
+    .assessment-horizon-table .assessment-horizon-delta {
+        font-size: 9px;
+        display: block;
+        margin-top: 1px;
+    }
+    .assessment-horizon-table .interest-savings {
+        font-size: 9px;
+    }
+    /* Mobiilissa Lisäriski-sarake voi olla tilaa vievä — piilotetaan
+       jotta tärkeät 5 saraketta mahtuvat. Lisäriski-info löytyy yhä
+       Impact-laatikon Lainan korkokulujen muutoksesta. */
+    .assessment-horizon-table .assessment-horizon-extra-risk,
+    .assessment-horizon-table thead th:nth-child(5) {
+        display: none;
     }
     .impact-net-value {
         font-size: 22px;
